@@ -1,0 +1,30 @@
+/home/admin/prj/FPGA25_SAT_Accel/src/bin/test.real.out /home/admin/prj/FPGA25_SAT_Accel/src/bin/workload-hw.xclbin /home/admin/prj/FPGA25_SAT_Accel/src/configuration.json /home/admin/prj/FPGA25_SAT_Accel/benchmark/hidden-k3-s0-r4-n500-03.cnf /home/admin/prj/FPGA25_SAT_Accel/benchmark/results/hidden-k3-s0-r4-n500-03_vck5000_metrics.csv 1
+INPUT CHECK: ABSOLUTE LITERALS: 0/500 PRESOLVED COUNT: 0/2000 NUMBER OF ELEMENTS: 16016 8000
+DISTRIBUTION OF MEMORY:
+(0,2),(1,5),(2,30),(3,40),(4,72),(5,63),(6,87),(7,78),(8,46),(9,33),(10,21),(11,7),(12,10),(13,5),(14,0),(15,0),(16,1),(17,0),
+(0,1),(1,9),(2,16),(3,49),(4,67),(5,79),(6,88),(7,70),(8,47),(9,32),(10,16),(11,15),(12,10),(13,1),(14,0),(15,0),(16,0),(17,0),
+Found Platform
+Platform Name: Xilinx
+INFO: Reading /home/admin/prj/FPGA25_SAT_Accel/src/bin/workload-hw.xclbin
+Loading: '/home/admin/prj/FPGA25_SAT_Accel/src/bin/workload-hw.xclbin'
+Trying to program device[0]: xilinx_vck5000_gen4x8_qdma_base_2
+Device[0]: program successful!
+
+
+
+TRIP COUNT FOR LEARNING (iteration/mergecount): 2340164 34650180
+TRIP COUNT FOR MINIMIZE (iteration/mergecount/simplified): 2287921 12416979 60412
+STATS FOR LONGEST CLAUSE (longest clause/longest simplified): 95 60
+AVERAGE LATENCY FOR BCP CHECK VAR: 7457711 31.38
+ZEROING OVEHREAD: 1516005
+CLEAR STREAM OVERHEAD: 2032545
+ACCESS LIT STORE STATS: 7435710 7435636 75961870 76250814
+STATS (TOTAL, DECISION, RETRY, BACKTRACK, RST): 307563 123702 91803 92058 254
+STATS FOR CLAUSE LBD SCORE: (2) 70 (3) 477 (4) 1320 (5) 2107 (6) 2610 (7) 3072 (8) 3395 (9) 3664 (10) 3814 (11) 71528
+STATS FOR CLAUSE REMOVAL LBD SCORE: (2) 0 (3) 0 (4) 0 (5) 1767 (6) 2229 (7) 2610 (8) 2839 (9) 3034 (10) 3150 (11) 62670
+CYCLE COUNTERS (COPY, PQ-FIND, BRANCH, LEARN, LEARN_MIN, SAVE, RESIZE, BACKTRACK, DELETE): 2,163 3,009,494 234,023,150 138,469,281 158,780,286 6,302,445 1,852,630 0 13,871,043
+Kernel execution time: 0 (min) 2 (s) 540 (ms) 132 (us) RAW: 2540132511
+ERROR DURING CLAUSE LEARNING ALLOCATION: -4
+Command exited with non-zero status 3
+HOST_WALL_SECONDS=3.64
+HOST_MAX_RSS_KB=60140

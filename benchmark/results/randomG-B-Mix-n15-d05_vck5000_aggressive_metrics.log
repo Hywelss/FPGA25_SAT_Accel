@@ -1,0 +1,30 @@
+/home/admin/prj/FPGA25_SAT_Accel/src/bin/test.real.out /home/admin/prj/FPGA25_SAT_Accel/src/bin/workload-hw.xclbin /home/admin/prj/FPGA25_SAT_Accel/benchmark/configuration_vck5000_aggressive.json /home/admin/prj/FPGA25_SAT_Accel/benchmark/randomG-B-Mix-n15-d05.cnf /home/admin/prj/FPGA25_SAT_Accel/benchmark/results/randomG-B-Mix-n15-d05_vck5000_aggressive_metrics.csv 0
+INPUT CHECK: ABSOLUTE LITERALS: 120/342 PRESOLVED COUNT: 0/738 NUMBER OF ELEMENTS: 7296 3184
+DISTRIBUTION OF MEMORY:
+(0,0),(1,14),(2,198),(3,10),(4,0),(5,0),(6,0),(7,0),(8,0),(9,0),(10,0),(11,0),(12,0),(13,0),(14,0),(15,0),(16,0),(17,0),
+(0,0),(1,14),(2,75),(3,22),(4,20),(5,15),(6,2),(7,11),(8,2),(9,10),(10,9),(11,16),(12,8),(13,6),(14,2),(15,4),(16,1),(17,5),
+Found Platform
+Platform Name: Xilinx
+INFO: Reading /home/admin/prj/FPGA25_SAT_Accel/src/bin/workload-hw.xclbin
+Loading: '/home/admin/prj/FPGA25_SAT_Accel/src/bin/workload-hw.xclbin'
+Trying to program device[0]: xilinx_vck5000_gen4x8_qdma_base_2
+Device[0]: program successful!
+
+
+
+TRIP COUNT FOR LEARNING (iteration/mergecount): 1913910 30360595
+TRIP COUNT FOR MINIMIZE (iteration/mergecount/simplified): 5519945 34183995 57434
+STATS FOR LONGEST CLAUSE (longest clause/longest simplified): 83 77
+AVERAGE LATENCY FOR BCP CHECK VAR: 4608536 39.8313
+ZEROING OVEHREAD: 2046373
+CLEAR STREAM OVERHEAD: 463578
+ACCESS LIT STORE STATS: 4608416 4608320 51117139 51558512
+STATS (TOTAL, DECISION, RETRY, BACKTRACK, RST): 356257 154463 100642 101152 509
+STATS FOR CLAUSE LBD SCORE: (2) 11 (3) 57 (4) 290 (5) 862 (6) 1920 (7) 3380 (8) 4678 (9) 5323 (10) 5316 (11) 79314
+STATS FOR CLAUSE REMOVAL LBD SCORE: (2) 0 (3) 7 (4) 284 (5) 821 (6) 1860 (7) 3286 (8) 4530 (9) 5194 (10) 5177 (11) 72707
+CYCLE COUNTERS (COPY, PQ-FIND, BRANCH, LEARN, LEARN_MIN, SAVE, RESIZE, BACKTRACK, DELETE): 1,033 4,154,862 183,563,847 119,024,606 180,484,636 7,671,421 2,253,625 0 21,837,627
+Kernel execution time: 0 (min) 2 (s) 379 (ms) 989 (us) RAW: 2379989200
+ERROR DURING CLAUSE LEARNING ALLOCATION: -4
+Command exited with non-zero status 3
+HOST_WALL_SECONDS=3.73
+HOST_MAX_RSS_KB=60544

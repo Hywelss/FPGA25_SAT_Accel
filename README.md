@@ -71,6 +71,71 @@ cd src/bin
 -You should modify the host.cpp in src to your desire to not do this check.  
 -If host.cpp is modified, remember to recompile with ./runCompile.sh opencl  
 
+## Benchmark
+
+The [`benchmark/`](benchmark/) directory contains SAT Competition instances,
+their original compressed archives, SHA256 checksums, a reproducible VCK5000
+runner, raw CSV/log output, and a detailed
+[`results/summary.md`](benchmark/results/summary.md).
+
+### Capacity audit of the provided test cases
+
+The 78 version-controlled instances under `SAT_test_cases/` were scanned using
+the same clause padding and literal-page allocation rules as `host.cpp`. All 78
+fit the VCK5000 build statically, but the collection is weighted toward small
+and medium instances:
+
+| Metric | Median | Maximum |
+|---|---:|---:|
+| Variables | 256 | 17,303 |
+| Clauses | 1,692 | 88,373 |
+| Literal-store elements | 13,728 | 402,496 / 524,288 |
+| Clause-store elements | 9,772 | 488,216 / 524,288 |
+
+Of these inputs, 54/78 have at most 1,000 variables and 69/78 have at most
+50,000 clauses. The largest variable count is in `ssa6288-047.dimacs`; the
+largest clause count is in
+`logistics-rotate-07t5.shuffled-as.sat05-1137.dimacs`. The most storage-heavy
+input, `16_8_7.txt`, consumes 93.1% of the VCK5000 clause store before solving
+starts, leaving only 36,072 elements for learned clauses.
+
+Static fit does not guarantee that an instance can be solved. The current
+hardware limits are 32,768 variables, 131,072 clauses, 524,288 literal/clause
+store elements, and 1,024 literals in one learned clause. Difficult searches
+can exhaust dynamic learned-clause pages even when the input itself is small.
+`testcases.sh` treats host exit code 3 as an expected on-chip-memory failure and
+skips that instance.
+
+### VCK5000 measurements
+
+Measurements below used the VCK5000 xclbin at a 223 MHz data clock. The
+reduced-difficulty SAT Competition 2003 Random Track instance completed and
+validated successfully in all five runs:
+
+| Instance | Result | Size | Runs | Kernel median | Kernel range |
+|---|---:|---:|---:|---:|---:|
+| `unif-r3-v500-c1500-01` | SAT | 500 variables / 1,500 clauses | 5/5 | 0.777118 ms | 0.770218--1.097930 ms |
+
+Each successful run followed the same search path: 240 decisions, 44 retries,
+and 44 backtracks. End-to-end host wall time was 1.18--1.90 seconds because it
+also includes loading the xclbin and programming the card.
+
+Modern difficult SAT Competition instances exposed two VCK5000 resource
+limits instead of completing: difficult UNSAT cases exhausted learned-clause
+pages (`-4`), while two difficult SAT cases generated learned clauses longer
+than 1,024 literals (`-2`). Their short kernel runtimes are time to a detected
+resource limit, not solution times, and must not be used for speedup claims.
+See the benchmark summary and raw logs for the complete measurements.
+
+To reproduce the successful run from the repository root:
+
+```sh
+CNF_FILE="$PWD/benchmark/unif-r3-v500-c1500-01.cnf" \
+EXPECTED_RESULT=1 \
+./benchmark/run_vck5000.sh \
+  "$PWD/benchmark/results/unif-r3-v500-c1500-01_vck5000_metrics.csv"
+```
+
 ## To run MiniSat or Kissat:  
 -First clone repository and follow the install instructions provided by those authors.  
 https://github.com/niklasso/minisat  

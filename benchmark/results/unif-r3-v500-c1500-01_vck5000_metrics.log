@@ -1,0 +1,28 @@
+/home/admin/prj/FPGA25_SAT_Accel/src/bin/test.real.out /home/admin/prj/FPGA25_SAT_Accel/src/bin/workload-hw.xclbin /home/admin/prj/FPGA25_SAT_Accel/src/configuration.json /home/admin/prj/FPGA25_SAT_Accel/benchmark/unif-r3-v500-c1500-01.cnf /home/admin/prj/FPGA25_SAT_Accel/benchmark/results/unif-r3-v500-c1500-01_vck5000_metrics.csv 1
+INPUT CHECK: ABSOLUTE LITERALS: 0/500 PRESOLVED COUNT: 0/1500 NUMBER OF ELEMENTS: 16000 6000
+DISTRIBUTION OF MEMORY:
+(0,6),(1,29),(2,56),(3,80),(4,87),(5,82),(6,60),(7,44),(8,33),(9,15),(10,7),(11,1),(12,0),(13,0),(14,0),(15,0),(16,0),(17,0),
+(0,7),(1,20),(2,57),(3,97),(4,89),(5,79),(6,72),(7,49),(8,15),(9,9),(10,5),(11,1),(12,0),(13,0),(14,0),(15,0),(16,0),(17,0),
+Found Platform
+Platform Name: Xilinx
+INFO: Reading /home/admin/prj/FPGA25_SAT_Accel/src/bin/workload-hw.xclbin
+Loading: '/home/admin/prj/FPGA25_SAT_Accel/src/bin/workload-hw.xclbin'
+Trying to program device[0]: xilinx_vck5000_gen4x8_qdma_base_2
+Device[0]: program successful!
+
+
+
+TRIP COUNT FOR LEARNING (iteration/mergecount): 991 14202
+TRIP COUNT FOR MINIMIZE (iteration/mergecount/simplified): 1044 3555 13
+STATS FOR LONGEST CLAUSE (longest clause/longest simplified): 79 60
+AVERAGE LATENCY FOR BCP CHECK VAR: 4404 12.1896
+ZEROING OVEHREAD: 682
+CLEAR STREAM OVERHEAD: 535
+ACCESS LIT STORE STATS: 4281 3794 4579 4089
+STATS (TOTAL, DECISION, RETRY, BACKTRACK, RST): 328 240 44 44 0
+STATS FOR CLAUSE LBD SCORE: (2) 0 (3) 1 (4) 1 (5) 3 (6) 1 (7) 4 (8) 3 (9) 1 (10) 0 (11) 30
+STATS FOR CLAUSE REMOVAL LBD SCORE: (2) 0 (3) 0 (4) 0 (5) 0 (6) 0 (7) 0 (8) 0 (9) 0 (10) 0 (11) 0
+CYCLE COUNTERS (COPY, PQ-FIND, BRANCH, LEARN, LEARN_MIN, SAVE, RESIZE, BACKTRACK, DELETE): 1,604 8,517 53,683 58,055 23,888 2,837 668 0 0
+Kernel execution time: 0 (min) 0 (s) 1 (ms) 97 (us) RAW: 1097935
+HOST_WALL_SECONDS=1.18
+HOST_MAX_RSS_KB=60136

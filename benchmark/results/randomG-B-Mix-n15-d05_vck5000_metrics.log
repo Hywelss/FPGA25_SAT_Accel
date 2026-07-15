@@ -1,0 +1,30 @@
+/home/admin/prj/FPGA25_SAT_Accel/src/bin/test.real.out /home/admin/prj/FPGA25_SAT_Accel/src/bin/workload-hw.xclbin /home/admin/prj/FPGA25_SAT_Accel/src/configuration.json /home/admin/prj/FPGA25_SAT_Accel/benchmark/randomG-B-Mix-n15-d05.cnf /home/admin/prj/FPGA25_SAT_Accel/benchmark/results/randomG-B-Mix-n15-d05_vck5000_metrics.csv 0
+INPUT CHECK: ABSOLUTE LITERALS: 120/342 PRESOLVED COUNT: 0/738 NUMBER OF ELEMENTS: 7296 3184
+DISTRIBUTION OF MEMORY:
+(0,0),(1,14),(2,198),(3,10),(4,0),(5,0),(6,0),(7,0),(8,0),(9,0),(10,0),(11,0),(12,0),(13,0),(14,0),(15,0),(16,0),(17,0),
+(0,0),(1,14),(2,75),(3,22),(4,20),(5,15),(6,2),(7,11),(8,2),(9,10),(10,9),(11,16),(12,8),(13,6),(14,2),(15,4),(16,1),(17,5),
+Found Platform
+Platform Name: Xilinx
+INFO: Reading /home/admin/prj/FPGA25_SAT_Accel/src/bin/workload-hw.xclbin
+Loading: '/home/admin/prj/FPGA25_SAT_Accel/src/bin/workload-hw.xclbin'
+Trying to program device[0]: xilinx_vck5000_gen4x8_qdma_base_2
+Device[0]: program successful!
+
+
+
+TRIP COUNT FOR LEARNING (iteration/mergecount): 797340 13264333
+TRIP COUNT FOR MINIMIZE (iteration/mergecount/simplified): 2082984 13863879 34451
+STATS FOR LONGEST CLAUSE (longest clause/longest simplified): 87 76
+AVERAGE LATENCY FOR BCP CHECK VAR: 1962625 94.407
+ZEROING OVEHREAD: 909322
+CLEAR STREAM OVERHEAD: 271458
+ACCESS LIT STORE STATS: 1962505 1962389 61052694 61229999
+STATS (TOTAL, DECISION, RETRY, BACKTRACK, RST): 147564 60635 43401 43528 126
+STATS FOR CLAUSE LBD SCORE: (2) 7 (3) 43 (4) 109 (5) 203 (6) 334 (7) 479 (8) 647 (9) 805 (10) 921 (11) 39979
+STATS FOR CLAUSE REMOVAL LBD SCORE: (2) 0 (3) 0 (4) 0 (5) 0 (6) 0 (7) 0 (8) 0 (9) 616 (10) 754 (11) 30874
+CYCLE COUNTERS (COPY, PQ-FIND, BRANCH, LEARN, LEARN_MIN, SAVE, RESIZE, BACKTRACK, DELETE): 937 1,554,465 185,285,589 50,728,166 128,696,123 3,513,935 994,491 0 8,348,747
+Kernel execution time: 0 (min) 1 (s) 722 (ms) 388 (us) RAW: 1722388581
+ERROR DURING CLAUSE LEARNING ALLOCATION: -4
+Command exited with non-zero status 3
+HOST_WALL_SECONDS=3.23
+HOST_MAX_RSS_KB=60192

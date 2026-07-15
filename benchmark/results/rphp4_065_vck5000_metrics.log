@@ -1,0 +1,30 @@
+/home/admin/prj/FPGA25_SAT_Accel/src/bin/test.real.out /home/admin/prj/FPGA25_SAT_Accel/src/bin/workload-hw.xclbin /home/admin/prj/FPGA25_SAT_Accel/src/configuration.json /home/admin/prj/FPGA25_SAT_Accel/benchmark/rphp4_065_shuffled.cnf /home/admin/prj/FPGA25_SAT_Accel/benchmark/results/rphp4_065_vck5000_metrics.csv 0
+INPUT CHECK: ABSOLUTE LITERALS: 0/520 PRESOLVED COUNT: 0/6959 NUMBER OF ELEMENTS: 42640 53392
+DISTRIBUTION OF MEMORY:
+(0,0),(1,214),(2,0),(3,0),(4,168),(5,0),(6,0),(7,0),(8,0),(9,0),(10,0),(11,0),(12,0),(13,0),(14,0),(15,0),(16,0),(17,138),
+(0,0),(1,241),(2,0),(3,0),(4,157),(5,0),(6,0),(7,0),(8,0),(9,0),(10,0),(11,0),(12,0),(13,0),(14,0),(15,0),(16,0),(17,122),
+Found Platform
+Platform Name: Xilinx
+INFO: Reading /home/admin/prj/FPGA25_SAT_Accel/src/bin/workload-hw.xclbin
+Loading: '/home/admin/prj/FPGA25_SAT_Accel/src/bin/workload-hw.xclbin'
+Trying to program device[0]: xilinx_vck5000_gen4x8_qdma_base_2
+Device[0]: program successful!
+
+
+
+TRIP COUNT FOR LEARNING (iteration/mergecount): 702006 12589394
+TRIP COUNT FOR MINIMIZE (iteration/mergecount/simplified): 1379111 18355805 39364
+STATS FOR LONGEST CLAUSE (longest clause/longest simplified): 259 251
+AVERAGE LATENCY FOR BCP CHECK VAR: 3011645 88.3527
+ZEROING OVEHREAD: 1801976
+CLEAR STREAM OVERHEAD: 253335
+ACCESS LIT STORE STATS: 3011645 3011525 59206705 59459315
+STATS (TOTAL, DECISION, RETRY, BACKTRACK, RST): 1331396 1247069 42100 42227 126
+STATS FOR CLAUSE LBD SCORE: (2) 8 (3) 70 (4) 262 (5) 4815 (6) 23902 (7) 83 (8) 100 (9) 39 (10) 40 (11) 12907
+STATS FOR CLAUSE REMOVAL LBD SCORE: (2) 0 (3) 0 (4) 0 (5) 1431 (6) 19238 (7) 73 (8) 90 (9) 32 (10) 31 (11) 11349
+CYCLE COUNTERS (COPY, PQ-FIND, BRANCH, LEARN, LEARN_MIN, SAVE, RESIZE, BACKTRACK, DELETE): 7,088 27,679,429 266,087,025 46,686,382 136,123,853 3,752,822 861,942 0 11,962,682
+Kernel execution time: 0 (min) 2 (s) 361 (ms) 963 (us) RAW: 2361963044
+ERROR DURING CLAUSE LEARNING ALLOCATION: -4
+Command exited with non-zero status 3
+HOST_WALL_SECONDS=4.26
+HOST_MAX_RSS_KB=60440
