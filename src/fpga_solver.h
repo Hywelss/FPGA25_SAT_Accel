@@ -24,8 +24,21 @@
 #define _FPGA_CLS_DEP_DIST 5
 #define _FPGA_RESOLVE_DEP_DIST 3
 #define _FPGA_PARALLEL_MINIMIZE 2
+#if defined(FPGA_VCK5000)
+// ScaleSAT phase 1: VCK5000 has enough BRAM headroom to keep a larger
+// conflict-analysis scratchpad.  The original 1024-entry limit rejected
+// otherwise valid learned clauses before memory pressure management ran.
+#define _FPGA_MAX_LEARN_ELE 2048
+#define _FPGA_MAX_LEARN_ELE_BITS 11
+#else
 #define _FPGA_MAX_LEARN_ELE 1024
 #define _FPGA_MAX_LEARN_ELE_BITS 10
+#endif
+
+// A pressure-triggered restart is requested while there is still enough room
+// for one worst-case learned clause.  This makes garbage collection proactive
+// instead of waiting for the page allocator to fail.
+#define _FPGA_GC_HEADROOM_MULTIPLIER 2
 
 //REQUIRES FPGA BITSTREAM RECOMPILE
 //MUST BE MULTIPLE OF 16
@@ -34,11 +47,13 @@
 // Halving the literal/clauses store capacity keeps the complete design within
 // the VCK5000 URAM budget while preserving the solver architecture.
 #define _FPGA_MAX_LITERAL_ELEMENTS (128*4096)
+#define _FPGA_MAX_CLAUSE_ELEMENTS (128*4096)
 #else
 #define _FPGA_MAX_LITERAL_ELEMENTS (256*4096)
+#define _FPGA_MAX_CLAUSE_ELEMENTS (256*4096)
 #endif
 #define _HOST_MAX_LITERAL_ELEMENTS _FPGA_MAX_LITERAL_ELEMENTS
-#define _HOST_MAX_CLAUSE_ELEMENTS _HOST_MAX_LITERAL_ELEMENTS
+#define _HOST_MAX_CLAUSE_ELEMENTS _FPGA_MAX_CLAUSE_ELEMENTS
 
 //FOR THE CONFIGURATION.JSON FILE:
 
@@ -64,7 +79,7 @@
 
 const int MAX_STREAM_DEPTH=(_FPGA_MAX_LITERALS/4);
 const unsigned int _MAX_PAGES_LIT_STORE_=_FPGA_MAX_LITERAL_ELEMENTS/16;
-const unsigned int _MAX_PAGES_CLS_STORE_=_FPGA_MAX_LITERAL_ELEMENTS/4;
+const unsigned int _MAX_PAGES_CLS_STORE_=_FPGA_MAX_CLAUSE_ELEMENTS/4;
 
 extern int spentRemoving;
 extern int overhead;

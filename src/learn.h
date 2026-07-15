@@ -13,7 +13,7 @@ void clause_store_prefetch(hls::stream<cls>& prefetchClsStore, hls::stream<ap_ax
 
 void merge_resolution_sort(hls::stream<lit_resolve>& mrsp2Stream, hls::stream<lit>& fromClsStore,
     lit resolutionClause[_FPGA_MAX_LEARN_ELE], ap_uint<_FPGA_MAX_LEARN_ELE_BITS+2> mergeScratchPad[_FPGA_MAX_LITERALS], ap_uint<512> validBit[_FPGA_MAX_LITERALS/512],
-    unsigned int& numElements, ap_uint<64>& learnedStats);
+    unsigned int& numElements, bool& overflow, ap_uint<64>& learnedStats);
 void merge_resolution_sort_part_2(hls::stream<ap_axiu<32,0,0,0>>& pqHandlerInput, hls::stream<lit_resolve>& mrsp2Stream, 
     const literalMetaData lmd[_FPGA_MAX_LITERALS], literalMinimizeMetaData lmmd[_FPGA_PARALLEL_MINIMIZE][_FPGA_MAX_LITERALS],
     unsigned int& streamSize, unsigned int& highestIL, unsigned int& fixedStackCount, const int decisionLevel);
@@ -21,7 +21,7 @@ void resolution_dataflow_wrapper(hls::stream<ap_axiu<32,0,0,0>>& pqHandlerInput,
     ap_uint<_FPGA_MAX_LEARN_ELE_BITS+2> mergeScratchPad[_FPGA_MAX_LITERALS], ap_uint<512> validBit[_FPGA_MAX_LITERALS/512],
     const literalMetaData lmd[_FPGA_MAX_LITERALS], literalMinimizeMetaData lmmd[_FPGA_PARALLEL_MINIMIZE][_FPGA_MAX_LITERALS],
     lit resolutionClause[_FPGA_MAX_LEARN_ELE],
-    unsigned int& numElements, unsigned int& streamSize, unsigned int& highestIL, unsigned int& fixedStackCount,
+    unsigned int& numElements, bool& overflow, unsigned int& streamSize, unsigned int& highestIL, unsigned int& fixedStackCount,
     const int decisionLevel, ap_uint<64>& learnedStats, 
     hls::stream<ap_axiu<32,0,0,0>>& clauseStoreOutputStream);
 
@@ -41,7 +41,7 @@ void undo_states_and_minimize_task_parallel_wrapper(hls::stream<ap_axiu<32,0,0,0
     hls::stream<ap_axiu<32,0,0,0>>& clauseStoreOutputStream1, hls::stream<ap_axiu<32,0,0,0>>& clauseStoreOutputStream2, volatile uint64_t store[2]);
 
 void findNextCls(hls::stream<cls>& nextClauseReg, hls::stream<bool>& stopSignal, 
-    unsigned int& trailEndIndex, const ap_uint<12> mergeScratchPad[_FPGA_MAX_LITERALS], const ap_uint<512> validBit[_FPGA_MAX_LITERALS/512],
+    unsigned int& trailEndIndex, const ap_uint<_FPGA_MAX_LEARN_ELE_BITS+2> mergeScratchPad[_FPGA_MAX_LITERALS], const ap_uint<512> validBit[_FPGA_MAX_LITERALS/512],
     const lit answerStack[_FPGA_MAX_LITERALS], const cls unitByCls[_FPGA_MAX_LITERALS],
     const literalMinimizeMetaData lmmd[_FPGA_PARALLEL_MINIMIZE][_FPGA_MAX_LITERALS], ap_uint<64>& learnedStats);
 void findNextClsCompare(hls::stream<cls>& nextClauseReg, hls::stream<bool>& stopSignal, cls& nextClauseMerge);

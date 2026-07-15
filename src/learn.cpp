@@ -21,7 +21,7 @@ void clause_store_prefetch(hls::stream<cls>& prefetchClsStore, hls::stream<ap_ax
 
 void merge_resolution_sort(hls::stream<lit_resolve>& mrsp2Stream, hls::stream<lit>& fromClsStore,
     lit resolutionClause[_FPGA_MAX_LEARN_ELE], ap_uint<_FPGA_MAX_LEARN_ELE_BITS+2> mergeScratchPad[_FPGA_MAX_LITERALS], ap_uint<512> validBit[_FPGA_MAX_LITERALS/512],
-    unsigned int& numElements, ap_uint<64>& learnedStats){
+    unsigned int& numElements, bool& overflow, ap_uint<64>& learnedStats){
     #pragma HLS inline off
 
     const int RESOLVE_DEP = _FPGA_RESOLVE_DEP_DIST;
@@ -108,7 +108,7 @@ void merge_resolution_sort(hls::stream<lit_resolve>& mrsp2Stream, hls::stream<li
             
             mergeScratchPad[abs(readFromClsStore)-1] = 0;  
             mrsp2Stream.write((lit_resolve){.literal=readFromClsStore,.resolved=true});
-        }else if(insert){
+        }else if(insert && numElements < _FPGA_MAX_LEARN_ELE){
             resolutionClause[numElements] = readFromClsStore;
             position = numElements;
             numElements++;
@@ -121,6 +121,11 @@ void merge_resolution_sort(hls::stream<lit_resolve>& mrsp2Stream, hls::stream<li
             mergeScratchPad[abs(readFromClsStore)-1].range(_FPGA_MAX_LEARN_ELE_BITS-1,0) = position;
 
             mrsp2Stream.write((lit_resolve){.literal=readFromClsStore,.resolved=false});
+        }else if(insert){
+            // Keep draining the clause-store stream so the dataflow region can
+            // terminate, but never write past the fixed conflict scratchpad.
+            // The caller reports the capacity error after this merge finishes.
+            overflow = true;
         }
     }
     if(resolvedHappened == 1){
@@ -189,7 +194,7 @@ void resolution_dataflow_wrapper(hls::stream<ap_axiu<32,0,0,0>>& pqHandlerInput,
     ap_uint<_FPGA_MAX_LEARN_ELE_BITS+2> mergeScratchPad[_FPGA_MAX_LITERALS], ap_uint<512> validBit[_FPGA_MAX_LITERALS/512], 
     const literalMetaData lmd[_FPGA_MAX_LITERALS], literalMinimizeMetaData lmmd[_FPGA_PARALLEL_MINIMIZE][_FPGA_MAX_LITERALS],
     lit resolutionClause[_FPGA_MAX_LEARN_ELE],
-    unsigned int& numElements, unsigned int& streamSize, unsigned int& highestIL, unsigned int& fixedStackCount,
+    unsigned int& numElements, bool& overflow, unsigned int& streamSize, unsigned int& highestIL, unsigned int& fixedStackCount,
     const int decisionLevel, ap_uint<64>& learnedStats, hls::stream<ap_axiu<32,0,0,0>>& clauseStoreOutputStream){
     #pragma HLS inline off
 
@@ -204,7 +209,7 @@ void resolution_dataflow_wrapper(hls::stream<ap_axiu<32,0,0,0>>& pqHandlerInput,
     clause_store_prefetch(fromClsStore, clauseStoreOutputStream);
 
     merge_resolution_sort(mrsp2Stream, fromClsStore,
-        resolutionClause, mergeScratchPad, validBit, numElements, learnedStats);
+        resolutionClause, mergeScratchPad, validBit, numElements, overflow, learnedStats);
     merge_resolution_sort_part_2(pqHandlerInput, mrsp2Stream, 
         lmd, lmmd, streamSize, highestIL, fixedStackCount, decisionLevel);
 }
@@ -612,6 +617,7 @@ void learnClause(clsState clsStates[_FPGA_CLS_STATES_PARTITION][_FPGA_MAX_CLAUSE
 
     bool foundAbsolute = false;
     bool isUIP = false;
+    bool resolutionOverflow = false;
 
     unsigned int streamSize = 0;
     unsigned int trailEndIndex = 0;
@@ -643,7 +649,7 @@ void learnClause(clsState clsStates[_FPGA_CLS_STATES_PARTITION][_FPGA_MAX_CLAUSE
         learnedStats[0]++;
         resolution_dataflow_wrapper(pqHandlerInput,
             mergeScratchPadLearn, validBitLearn, lmd, lmmd, resolutionClause,
-            numElements, streamSize, highestIL, fixedStackCount, decisionLevel, learnedStats[1], clauseStoreOutputStream1);
+            numElements, resolutionOverflow, streamSize, highestIL, fixedStackCount, decisionLevel, learnedStats[1], clauseStoreOutputStream1);
         if(!setTrailIndexOnce){
             trailEndIndex = highestIL;
             setTrailIndexOnce = true;
@@ -653,7 +659,10 @@ void learnClause(clsState clsStates[_FPGA_CLS_STATES_PARTITION][_FPGA_MAX_CLAUSE
             longestClause[0] = numElements;
         }
 
-        if(numElements > _FPGA_MAX_LEARN_ELE){
+        if(resolutionOverflow){
+            if(longestClause[0] < _FPGA_MAX_LEARN_ELE+1){
+                longestClause[0] = _FPGA_MAX_LEARN_ELE+1;
+            }
             error = -2;
             break;
         }
@@ -881,4 +890,3 @@ void learnClause(clsState clsStates[_FPGA_CLS_STATES_PARTITION][_FPGA_MAX_CLAUSE
     sendTime(timerValueStream, conditionStream, 1, &store[1]);
     cycleCounter[6] += store[1]-store[0];
 }
-

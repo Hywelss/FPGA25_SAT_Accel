@@ -21,10 +21,27 @@ void sendTime(hls::stream<ap_axiu<64,0,0,0>>& timerValueStream, hls::stream<ap_a
     }
 }
 
-void copyStats(ap_uint<64>* learnedStats, ap_uint<64>* longestClause, ap_uint<64>* litStoreAccessStats, ap_uint<64>* cycleCounter, int* miscCounters){
+void queryClauseStoreCapacity(
+    unsigned int& freeClauseElements, unsigned int& freeClauseIds, unsigned int& learnedClauseCount,
+    hls::stream<ap_axiu<96,0,0,0>>& clauseStoreInputStream,
+    hls::stream<ap_axiu<32,0,0,0>>& clauseStoreOutputStream){
     #pragma HLS inline off
 
-    int copyMe[48];
+    ap_axiu<96,0,0,0> command;
+    command.data = 0;
+    command.data.range(95,64) = csh::STATUS;
+    clauseStoreInputStream.write(command);
+
+    freeClauseElements = clauseStoreOutputStream.read().data;
+    freeClauseIds = clauseStoreOutputStream.read().data;
+    learnedClauseCount = clauseStoreOutputStream.read().data;
+}
+
+void copyStats(ap_uint<64>* learnedStats, ap_uint<64>* longestClause, ap_uint<64>* litStoreAccessStats,
+    ap_uint<64>* cycleCounter, ap_uint<64>* scalabilityStats, int* miscCounters){
+    #pragma HLS inline off
+
+    int copyMe[53];
     copyMe[0] = learnedStats[0].range(31,0);
     copyMe[1] = learnedStats[0].range(63,32);
     copyMe[2] = learnedStats[1].range(31,0);
@@ -82,7 +99,18 @@ void copyStats(ap_uint<64>* learnedStats, ap_uint<64>* longestClause, ap_uint<64
     copyMe[41] = overhead;
     copyMe[42] = splitResidualCnt;
 
-    memcpy(miscCounters+7, copyMe, sizeof(int) * 43);
+    copyMe[43] = scalabilityStats[0].range(31,0);
+    copyMe[44] = scalabilityStats[0].range(63,32);
+    copyMe[45] = scalabilityStats[1].range(31,0);
+    copyMe[46] = scalabilityStats[1].range(63,32);
+    copyMe[47] = scalabilityStats[2].range(31,0);
+    copyMe[48] = scalabilityStats[2].range(63,32);
+    copyMe[49] = scalabilityStats[3].range(31,0);
+    copyMe[50] = scalabilityStats[3].range(63,32);
+    copyMe[51] = scalabilityStats[4].range(31,0);
+    copyMe[52] = scalabilityStats[4].range(63,32);
+
+    memcpy(miscCounters+7, copyMe, sizeof(int) * 53);
 }
 
 extern "C"{
@@ -200,6 +228,12 @@ void solver(clsStatePCIE* clsStates, ap_int<512>* litStore, lit* answerStack,
     #pragma HLS array_partition variable=longestClause dim=0 complete
     ap_uint<64> litStoreAccessStats[4] = {0,0,0,0};
     #pragma HLS array_partition variable=litStoreAccessStats dim=0 complete
+    // pressure resets, status checks, minimum free clause elements,
+    // minimum free clause IDs, minimum free literal pages
+    ap_uint<64> scalabilityStats[5] = {
+        0, 0, _FPGA_MAX_CLAUSE_ELEMENTS, _FPGA_MAX_CLAUSES, _MAX_PAGES_LIT_STORE_
+    };
+    #pragma HLS array_partition variable=scalabilityStats dim=0 complete
 
     ap_axiu<96,0,0,0> messageValue;
 
@@ -298,7 +332,7 @@ void solver(clsStatePCIE* clsStates, ap_int<512>* litStore, lit* answerStack,
                 miscCounters[5] = answerStackHeight;
                 miscCounters[6] = 0;
 
-                copyStats(learnedStats, longestClause, litStoreAccessStats, cycleCounter, miscCounters);
+                copyStats(learnedStats, longestClause, litStoreAccessStats, cycleCounter, scalabilityStats, miscCounters);
 
                 ap_axiu<1,0,0,0> pkt;
                 pkt.data = 1;
@@ -337,7 +371,7 @@ void solver(clsStatePCIE* clsStates, ap_int<512>* litStore, lit* answerStack,
                 miscCounters[5] = answerStackHeight;
                 miscCounters[6] = 1;
 
-                copyStats(learnedStats, longestClause, litStoreAccessStats, cycleCounter, miscCounters);
+                copyStats(learnedStats, longestClause, litStoreAccessStats, cycleCounter, scalabilityStats, miscCounters);
 
                 COPY_OUT: for(unsigned int i = 0; i < NUM_LITERALS; i++){
                     #pragma HLS loop_tripcount min=1024 max=1024
@@ -385,6 +419,42 @@ void solver(clsStatePCIE* clsStates, ap_int<512>* litStore, lit* answerStack,
                 resetCount++;
             }
 
+            unsigned int freeClauseElements;
+            unsigned int freeClauseIds;
+            unsigned int learnedClauseCount;
+            queryClauseStoreCapacity(freeClauseElements, freeClauseIds, learnedClauseCount,
+                clauseStoreInputStream1, clauseStoreOutputStream1);
+
+            unsigned int freeLiteralPages = freeLitPageAddresses.size();
+            scalabilityStats[1]++;
+            if(scalabilityStats[2] > freeClauseElements){
+                scalabilityStats[2] = freeClauseElements;
+            }
+            if(scalabilityStats[3] > freeClauseIds){
+                scalabilityStats[3] = freeClauseIds;
+            }
+            if(scalabilityStats[4] > freeLiteralPages){
+                scalabilityStats[4] = freeLiteralPages;
+            }
+
+            const unsigned int clauseElementWatermark =
+                _FPGA_GC_HEADROOM_MULTIPLIER * _FPGA_MAX_LEARN_ELE;
+            const unsigned int literalPageWatermark =
+                _FPGA_GC_HEADROOM_MULTIPLIER * _FPGA_MAX_LEARN_ELE;
+            const bool allocationPressure =
+                freeClauseElements < clauseElementWatermark ||
+                freeClauseIds < _FPGA_GC_HEADROOM_MULTIPLIER ||
+                freeLiteralPages < literalPageWatermark;
+
+            if(allocationPressure && !resetAll && learnedClauseCount > 0){
+                // The current conflict still has enough reserved headroom to
+                // finish learning.  Backtracking to level zero then makes the
+                // existing deletion path safe for the following GC.
+                resetAll = true;
+                resetCount++;
+                scalabilityStats[0]++;
+            }
+
             messageValue.data.range(95,64) = 3;
             messageValue.data.range(63,32) = backtrackCount;
             messageValue.data.range(31,0) = 2;
@@ -414,7 +484,7 @@ void solver(clsStatePCIE* clsStates, ap_int<512>* litStore, lit* answerStack,
                 miscCounters[4] = resetCount;
                 miscCounters[5] = answerStackHeight;
                 
-                copyStats(learnedStats, longestClause, litStoreAccessStats, cycleCounter, miscCounters);
+                copyStats(learnedStats, longestClause, litStoreAccessStats, cycleCounter, scalabilityStats, miscCounters);
 
                 messageValue.data.range(95,64) = 0;
                 messageValue.data.range(63,32) = 0;

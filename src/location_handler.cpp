@@ -12,7 +12,7 @@ void location_handler(
     #pragma HLS INTERFACE axis port=locationOutputStream
 	#pragma HLS INTERFACE s_axilite port=return
 
-    ap_uint<128> mClsToLitStorePos[_FPGA_MAX_LITERAL_ELEMENTS/4];
+    ap_uint<128> mClsToLitStorePos[_FPGA_MAX_CLAUSE_ELEMENTS/4];
     #pragma HLS bind_storage variable=mClsToLitStorePos type=RAM_S2P impl=URAM latency=2
 
     ap_uint<128> mLitToClsStorePos[_FPGA_MAX_LITERAL_ELEMENTS/4];

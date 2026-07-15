@@ -96,11 +96,30 @@ void parseDIMACS(std::string filePath, problemData& pd, const rapidjson::Documen
             }
         }
 
+        if(tokens.empty()){
+            continue;
+        }
+
         if(tokens[0] == "c"){
             continue;
         }else if(state == 0 && tokens[0] == "p"){
+            if(tokens.size() < 4 || tokens[1] != "cnf"){
+                std::cout << "Malformed DIMACS header" << "\n";
+                exit(EXIT_FAILURE);
+            }
             pd.md.numLiterals = std::stoi(tokens[2]);
             pd.md.numClauses = std::stoi(tokens[3]);
+
+            // Validate compile-time address-space limits before allocating
+            // vectors or writing fixed-size host buffers.
+            if(pd.md.numLiterals > _FPGA_MAX_LITERALS){
+                std::cout << "Exceeded max literal support: " << pd.md.numLiterals << "\n";
+                exit(EXIT_FAILURE);
+            }
+            if(pd.md.numClauses > _FPGA_MAX_CLAUSES){
+                std::cout << "Exceeded max clause support: " << pd.md.numClauses << "\n";
+                exit(EXIT_FAILURE);
+            }
 
             litStore[0] = std::vector<std::vector<lit>>(pd.md.numLiterals);
             litStore[1] = std::vector<std::vector<lit>>(pd.md.numLiterals);
@@ -156,7 +175,6 @@ void parseDIMACS(std::string filePath, problemData& pd, const rapidjson::Documen
     memErr = posix_memalign((void**)&pd.clauseStore, 4096, _HOST_MAX_CLAUSE_ELEMENTS*sizeof(cls));
     memErr = posix_memalign((void**)&pd.cmd, 4096, _FPGA_MAX_CLAUSES*sizeof(clauseMetaData));
     memErr = posix_memalign((void**)&pd.litStore, 4096, _HOST_MAX_LITERAL_ELEMENTS*sizeof(lit));
-    memErr = posix_memalign((void**)&pd.litStore, 4096, _HOST_MAX_LITERAL_ELEMENTS*sizeof(lit));
     
     memErr = posix_memalign((void**)&pd.answerStack, 4096, pd.md.numLiterals*sizeof(lit));
     memErr = posix_memalign((void**)&pd.lmd, 4096, pd.md.numLiterals*sizeof(literalMetaDataPCIE));
@@ -172,6 +190,12 @@ void parseDIMACS(std::string filePath, problemData& pd, const rapidjson::Documen
     unsigned int index1D = 0;
     unsigned int index = 0;
     unsigned int preSolvedCount = 0;
+    const auto ensureClauseCapacity = [](unsigned int index, unsigned int required, unsigned int clauseId){
+        if(index > _HOST_MAX_CLAUSE_ELEMENTS || required > _HOST_MAX_CLAUSE_ELEMENTS-index){
+            std::cout << "WENT OVER ALLOCATION LIMIT - CLAUSE: " << clauseId << "\n";
+            exit(EXIT_FAILURE);
+        }
+    };
     
     for(unsigned int i = 0; i < clsStore.size(); i++){
         pd.cmd[i].addressStart = index1D;
@@ -182,6 +206,7 @@ void parseDIMACS(std::string filePath, problemData& pd, const rapidjson::Documen
         bool needZero = true;
 
         for(unsigned int j = 0; j < clsStore[i].size(); j++){
+            ensureClauseCapacity(index1D, 1, i+1);
             pd.clauseStore[index1D] = clsStore[i][j];
             xorCompact ^= pd.clauseStore[index1D];
             const bool isIn = decisionStore.find(clsStore[i][j]) != decisionStore.end();
@@ -193,6 +218,7 @@ void parseDIMACS(std::string filePath, problemData& pd, const rapidjson::Documen
             index++;
             
             if(index == 4-1){
+                ensureClauseCapacity(index1D, 1, i+1);
                 if(j != clsStore[i].size()-1){
                     pd.clauseStore[index1D] = index1D + 1;
                 }else{
@@ -202,20 +228,13 @@ void parseDIMACS(std::string filePath, problemData& pd, const rapidjson::Documen
                 index1D++;
                 index = 0;
             }
-            if(index1D > _HOST_MAX_CLAUSE_ELEMENTS){
-                std::cout << "WENT OVER ALLOCATION LIMIT - INSERT CLAUSE: " << i+1 << "\n";
-                exit(EXIT_FAILURE);
-            }
         }
 
         if(needZero){
             for(unsigned int j = 0; j < 4-index; j++){
+                ensureClauseCapacity(index1D, 1, i+1);
                 pd.clauseStore[index1D] = 0;
                 index1D++;
-                if(index1D > _HOST_MAX_CLAUSE_ELEMENTS){
-                    std::cout << "WENT OVER ALLOCATION LIMIT - ZERO INSERT CLAUSE: " << i+1 << "\n";
-                    exit(EXIT_FAILURE);
-                }
             }
         }
 
@@ -225,6 +244,7 @@ void parseDIMACS(std::string filePath, problemData& pd, const rapidjson::Documen
     if(index1D%configuration["_HOST_CLAUSE_PAGE_SIZE"].GetUint() != 0){
         unsigned int fill = configuration["_HOST_CLAUSE_PAGE_SIZE"].GetUint() - (index1D%configuration["_HOST_CLAUSE_PAGE_SIZE"].GetUint());
         for(unsigned int j = 0; j < fill; j++){
+            ensureClauseCapacity(index1D, 1, pd.md.numClauses);
             pd.clauseStore[index1D] = 0;
             index1D++;
         }
@@ -232,6 +252,12 @@ void parseDIMACS(std::string filePath, problemData& pd, const rapidjson::Documen
     pd.md.clauseElements = index1D;
 
     index1D = 0;
+    const auto ensureLiteralCapacity = [](unsigned int index, unsigned int required, unsigned int literalId){
+        if(index > _HOST_MAX_LITERAL_ELEMENTS || required > _HOST_MAX_LITERAL_ELEMENTS-index){
+            std::cout << "WENT OVER ALLOCATION LIMIT - LITERAL: " << literalId << "\n";
+            exit(EXIT_FAILURE);
+        }
+    };
     for(unsigned int i = 0; i < litStore[0].size(); i++){
         pd.lmd[i].compactlmd = 0;
         LMD_SHORTEST_CLS_LENGTH(pd.lmd[i].compactlmd) = 0;
@@ -271,11 +297,13 @@ void parseDIMACS(std::string filePath, problemData& pd, const rapidjson::Documen
             }
 
             for(unsigned int j = 0; j < litStore[a][i].size(); j++){
+                ensureLiteralCapacity(index1D, 1, i+1);
                 pd.litStore[index1D] = abs(litStore[a][i][j]);
                 index1D++;
                 index++;
 
                 if(index == configuration["_HOST_LITERAL_PAGE_SIZE"].GetUint()-2){
+                    ensureLiteralCapacity(index1D, 2, i+1);
                     pd.litStore[index1D] = 0;
                     index1D++;
                     pd.litStore[index1D] = index1D + 1;
@@ -284,20 +312,12 @@ void parseDIMACS(std::string filePath, problemData& pd, const rapidjson::Documen
 
                     index = 0;
                 }
-            
-                if(index1D > _HOST_MAX_LITERAL_ELEMENTS){
-                    std::cout << "WENT OVER ALLOCATION LIMIT - INSERT: LITERAL " << i+1 << " " << a << "\n";
-                    exit(EXIT_FAILURE);
-                }
             }
 
             for(unsigned int j = 0; j < configuration["_HOST_LITERAL_PAGE_SIZE"].GetUint()-index; j++){
+                ensureLiteralCapacity(index1D, 1, i+1);
                 pd.litStore[index1D] = 0;
                 index1D++;
-                if(index1D > _HOST_MAX_LITERAL_ELEMENTS){
-                    std::cout << "WENT OVER ALLOCATION LIMIT - FREE SPACE 1: " << i+1 << " " << a << "\n";
-                    exit(EXIT_FAILURE);
-                }
             }
             
             LMD_FREE_SPACE(pd.lmd[i].compactlmd,a) = configuration["_HOST_LITERAL_PAGE_SIZE"].GetUint()-index-2;
@@ -646,6 +666,7 @@ bool solve(std::string xclBinFile, std::string inputFilePath, std::string output
     int overhead;
     int clearStream;
     unsigned int checkCnt;
+    uint64_t scalabilityStats[5];
 
     memcpy(learnedStats, &pd.md.miscCounters[7], sizeof(uint64_t) * 5);
     memcpy(longestClause, &pd.md.miscCounters[17], sizeof(uint64_t) * 2);
@@ -655,6 +676,7 @@ bool solve(std::string xclBinFile, std::string inputFilePath, std::string output
     memcpy(cycleCounter, &pd.md.miscCounters[30], sizeof(uint64_t) * 9);
     memcpy(&overhead, &pd.md.miscCounters[48], sizeof(int));
     memcpy(&clearStream,&pd.md.miscCounters[49], sizeof(int));
+    memcpy(scalabilityStats, &pd.md.miscCounters[50], sizeof(uint64_t) * 5);
 
     uint64_t totalCycleCount = 0;
 
@@ -669,6 +691,11 @@ bool solve(std::string xclBinFile, std::string inputFilePath, std::string output
     std::cout << "AVERAGE LATENCY FOR BCP CHECK VAR: " << checkCnt << " " << (double)cycleCounter[2]/(double)checkCnt << "\n";
     std::cout << "ZEROING OVEHREAD: " << overhead << "\n";
     std::cout << "CLEAR STREAM OVERHEAD: " << clearStream << "\n";
+    std::cout << "SCALESAT CAPACITY (pressure resets/status checks/min free clause elements/min free clause IDs/min free literal pages): "
+        << scalabilityStats[0] << " " << scalabilityStats[1] << " " << scalabilityStats[2] << " "
+        << scalabilityStats[3] << " " << scalabilityStats[4] << "\n";
+    std::cout << "SCALESAT COMPILE-TIME LIMITS (learned clause/literal elements/clause elements): "
+        << _FPGA_MAX_LEARN_ELE << " " << _FPGA_MAX_LITERAL_ELEMENTS << " " << _FPGA_MAX_CLAUSE_ELEMENTS << "\n";
     std::cout << "ACCESS LIT STORE STATS: " << accessStats[0][0] << " " << accessStats[0][1] << " " << accessStats[1][0] << " " << accessStats[1][1] << "\n";
     std::cout << "STATS (TOTAL, DECISION, RETRY, BACKTRACK, RST): " << pd.md.miscCounters[0] << " " << pd.md.miscCounters[1] << " " << pd.md.miscCounters[2]
         << " " << pd.md.miscCounters[3] << " " << pd.md.miscCounters[4] << "\n";

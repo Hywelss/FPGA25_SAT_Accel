@@ -11,7 +11,7 @@ namespace lh{
     enum lh_codes{EXIT=-1,SEND=1,SAVE=2,UPDATE=3};
 }
 namespace csh{
-    enum csh_codes{EXIT=-1,SEND_LEN=1,SEND_LEN_BCP=2,SEND_CLS=3,SEND_CLS_MIN=4,SAVE=5,BUCKET=6,DELETE=7,MULTI_DEC=8};
+    enum csh_codes{EXIT=-1,SEND_LEN=1,SEND_LEN_BCP=2,SEND_CLS=3,SEND_CLS_MIN=4,SAVE=5,BUCKET=6,DELETE=7,MULTI_DEC=8,STATUS=9};
 }
 
 namespace pq{

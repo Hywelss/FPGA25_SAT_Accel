@@ -8,8 +8,8 @@ Following needs to be installed and is the version used for our design:
 -gcc/g++ version 10+  
 
 `runCompile.sh` compiles the host program and HLS kernels and generates the
-bitstream. The checked-in binary artifacts were built for the original U55C
-target and must be rebuilt for VCK5000.
+bitstream. Binary artifacts are platform- and branch-specific; rebuild them
+after changing either the target or a kernel.
 
 The build script defaults to the paths used on this machine. They can be
 overridden without editing the script:
@@ -99,12 +99,14 @@ largest clause count is in
 input, `16_8_7.txt`, consumes 93.1% of the VCK5000 clause store before solving
 starts, leaving only 36,072 elements for learned clauses.
 
-Static fit does not guarantee that an instance can be solved. The current
-hardware limits are 32,768 variables, 131,072 clauses, 524,288 literal/clause
-store elements, and 1,024 literals in one learned clause. Difficult searches
-can exhaust dynamic learned-clause pages even when the input itself is small.
-`testcases.sh` treats host exit code 3 as an expected on-chip-memory failure and
-skips that instance.
+Static fit does not guarantee that an instance can be solved. The baseline
+`vck5000-adaptation` hardware limits are 32,768 variables, 131,072 clauses,
+524,288 literal/clause-store elements, and 1,024 literals in one learned
+clause. The experimental `scalesat-tiered-memory` branch raises the last limit
+to 2,048 and adds proactive capacity-pressure collection, but the original CNF
+still has to fit in the on-chip stores. Difficult searches can exhaust dynamic
+learned-clause pages even when the input itself is small. `testcases.sh` treats
+host exit code 3 as an expected on-chip-memory failure and skips that instance.
 
 ### VCK5000 measurements
 
@@ -126,6 +128,38 @@ pages (`-4`), while two difficult SAT cases generated learned clauses longer
 than 1,024 literals (`-2`). Their short kernel runtimes are time to a detected
 resource limit, not solution times, and must not be used for speedup claims.
 See the benchmark summary and raw logs for the complete measurements.
+
+## ScaleSAT development
+
+The `scalesat-tiered-memory` branch is an experimental successor to the
+VCK5000 port. Its first phase introduces separate literal/clause capacities,
+pressure-aware learned-clause garbage collection, allocator telemetry, a
+2,048-literal conflict scratchpad on VCK5000, and bounds-safe conflict merging.
+The design and staged DDR/AIE roadmap are documented in
+[`docs/scalesat_architecture.md`](docs/scalesat_architecture.md). A versioned
+128-bit contract for a future asynchronous GNN branching heuristic is under
+[`aie/`](aie/); it is not yet connected to the solver or included in the
+hardware build.
+
+Phase-1 verification on VCK5000 (Vitis/XRT 2022.2):
+
+- all seven HLS kernels built successfully and all 20 provided SAT/UNSAT cases
+  passed software emulation;
+- hardware link, route, bitstream generation, DFX packaging, and xclbin
+  generation completed with zero errors;
+- the routed design uses 115,165 CLB LUTs (12.80%), 142,188 CLB registers
+  (7.90%), 216.5 BRAM tiles (22.39%), and 414 of 463 URAMs (89.42%);
+- the requested 220 MHz data clock did not close timing, so Vitis selected a
+  runtime data clock of 176 MHz; the independent kernel/control clock remains
+  500 MHz;
+- the on-board `aalto.dimacs` SAT smoke test passed and reported the new 2,048
+  learned-clause limit and capacity telemetry.
+
+The current phase improves safe learned-clause growth and observes allocator
+pressure; it does **not** yet make the input stores larger than 524,288
+elements. The 89.42% URAM occupancy and 176 MHz realized clock reinforce the
+need for the DDR-backed tier in phase 2 instead of further scaling monolithic
+URAM arrays.
 
 To reproduce the successful run from the repository root:
 

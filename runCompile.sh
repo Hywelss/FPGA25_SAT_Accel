@@ -135,7 +135,12 @@ compile_kernel(){
 	PIDS=""
 	FAIL=0
 	extraCommands="$PLATFORM_DEFINE"
-	(set -x; rm bin/*-$EMU_TYPE.xo bin/workload-$EMU_TYPE.xclbin)
+	LINK_OUTPUT="bin/workload-$EMU_TYPE.xclbin"
+	if [[ $PLATFORM == *vck5000* ]]
+	then
+		LINK_OUTPUT="bin/workload-$EMU_TYPE.xsa"
+	fi
+	(set -x; rm -f bin/*-$EMU_TYPE.xo bin/workload-$EMU_TYPE.xclbin bin/workload-$EMU_TYPE.xsa)
 
 	if [[ $EMU_TYPE == hw_emu || $EMU_TYPE == hw ]]
 	then
@@ -221,12 +226,26 @@ compile_kernel(){
 	bin/workload-${VITIS_HLS_KERNEL[3]}-$EMU_TYPE.xo \
 	bin/workload-${VITIS_HLS_KERNEL[4]}-$EMU_TYPE.xo \
 	bin/workload-${VITIS_HLS_KERNEL[5]}-$EMU_TYPE.xo \
-	bin/workload-${VITIS_HLS_KERNEL[6]}-$EMU_TYPE.xo -o bin/workload-$EMU_TYPE.xclbin
+	bin/workload-${VITIS_HLS_KERNEL[6]}-$EMU_TYPE.xo -o "$LINK_OUTPUT"
 
-	if [ $? -ne 0 ]
+	if [[ $? -ne 0 || ! -s "$LINK_OUTPUT" ]]
 	then
 		echo -e "${RD}Failed to link kernel object ${NC}"
 		exit 1
+	fi
+
+	if [[ $PLATFORM == *vck5000* ]]
+	then
+		v++ -p -t "$EMU_TYPE" \
+		--platform "$PLATFORM" \
+		"$LINK_OUTPUT" \
+		-o "bin/workload-$EMU_TYPE.xclbin"
+
+		if [[ $? -ne 0 || ! -s "bin/workload-$EMU_TYPE.xclbin" ]]
+		then
+			echo -e "${RD}VCK5000 packaging failed to produce workload-$EMU_TYPE.xclbin${NC}"
+			exit 1
+		fi
 	fi
 	cd ../
 }
