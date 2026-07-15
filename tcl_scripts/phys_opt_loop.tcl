@@ -1,4 +1,8 @@
-set dirname "/scratch/milo168/micro2024_8"
+if {[info exists ::env(SAT_ACCEL_ROOT)]} {
+    set dirname $::env(SAT_ACCEL_ROOT)
+} else {
+    set dirname [file normalize [pwd]]
+}
 
 set NLOOPS 5 
 set TNS_PREV 0

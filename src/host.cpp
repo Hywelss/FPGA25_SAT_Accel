@@ -9,6 +9,7 @@
 #include <set>
 #include <chrono>
 #include <queue>
+#include <cstdlib>
 #include "rapidjson/rapidjson.h"
 #include "rapidjson/document.h"
 #include "rapidjson/istreamwrapper.h"
@@ -388,38 +389,38 @@ bool solve(std::string xclBinFile, std::string inputFilePath, std::string output
     cl::Kernel clsStoreKernel;
     cl::Kernel storePositionKernel;
     cl::Kernel restartCalculateKernel;
-    cl::Kernel timerKernel;
-    cl::Kernel pqHandlerKernel;
+	cl::Kernel timerKernel;
+	cl::Kernel pqHandlerKernel;
     cl::Kernel messageKernel;
+	const char* requestedDevice = std::getenv("FPGA_DEVICE_NAME");
+	bool useHostOnlyDebug = false;
 
 	for (unsigned int i = 0; i < devices.size(); i++) {
 		device = devices[i];
+		const std::string deviceName = device.getInfo<CL_DEVICE_NAME>();
+		if(requestedDevice != nullptr && deviceName.find(requestedDevice) == std::string::npos){
+			continue;
+		}
+
 		// Creating Context and Command Queue for selected Device
 		context = cl::Context(device, NULL, NULL, NULL, &err);
 		if(err != CL_SUCCESS){
-			std::cerr << "Could not create context device, error number: " << err << "\n";
-			return false;
+			std::cerr << "Could not create context for device[" << i << "], error number: " << err << "\n";
+			continue;
 		}
 
 		q = cl::CommandQueue(context, device, CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE|CL_QUEUE_PROFILING_ENABLE, &err);
 		if(err != CL_SUCCESS){
-			std::cerr << "Could not create command queue, error number: " << err << "\n";
-			return false;
-		}
-		std::cout << "Trying to program device[" << i << "]: " << device.getInfo<CL_DEVICE_NAME>() << std::endl;
-        
-		#ifndef HW_SIM
-		if (device.getInfo<CL_DEVICE_NAME>() != "xilinx_u55c_gen3x16_xdma_base_3") {
-		#else
-		if (device.getInfo<CL_DEVICE_NAME>() != "xilinx_u55c_gen3x16_xdma_3_202210_1") {
-		#endif
+			std::cerr << "Could not create command queue for device[" << i << "], error number: " << err << "\n";
 			continue;
 		}
+		std::cout << "Trying to program device[" << i << "]: " << deviceName << std::endl;
 
 		cl::Program program(context, { device }, bins, NULL, &err);
 	
 		if(err != CL_SUCCESS){
-			std::cerr << "Failed to program device[" << i << "] with xclbin file!\n";
+			std::cerr << "Failed to program device[" << i << "] with xclbin file, error number: " << err << "\n";
+			continue;
 		}else{
 			std::cout << "Device[" << i << "]: program successful!\n";
 			// Creating Kernel
@@ -459,27 +460,40 @@ bool solve(std::string xclBinFile, std::string inputFilePath, std::string output
 				std::cerr << "Could not create message accelerate kernel, error number: " << err << "\n";
 				return false;
 			}
+			useHostOnlyDebug = deviceName.find("u55c") != std::string::npos;
 		}
 
-		valid_device++;
+		valid_device = 1;
 		break; // we break because we found a valid device
 	}
 
 	if(valid_device == 0) {
+		if(requestedDevice != nullptr){
+			std::cerr << "No programmable Xilinx device matched FPGA_DEVICE_NAME=" << requestedDevice << "\n";
+		}
 		std::cerr << "Failed to program any device found, exit!\n";
 		return false;
 	}
 
     int argN = 0;
 
-    cl_mem_ext_ptr_t hostBufferExt;
-	hostBufferExt.flags = XCL_MEM_EXT_HOST_ONLY;
-	hostBufferExt.obj = nullptr;
-	hostBufferExt.param = 0;
-
     cl::Buffer hostMemDebugBuffer;
+    std::vector<int, aligned_allocator<int>> debugStorage(8192, 0);
+    int* hostMemDebug = debugStorage.data();
 
-	OCL_CHECK(err, hostMemDebugBuffer = cl::Buffer(context, CL_MEM_READ_WRITE | CL_MEM_EXT_PTR_XILINX, sizeof(int) * 8192, &hostBufferExt, &err));
+	if(useHostOnlyDebug){
+		cl_mem_ext_ptr_t hostBufferExt;
+		hostBufferExt.flags = XCL_MEM_EXT_HOST_ONLY;
+		hostBufferExt.obj = nullptr;
+		hostBufferExt.param = 0;
+		OCL_CHECK(err, hostMemDebugBuffer = cl::Buffer(context, CL_MEM_READ_WRITE | CL_MEM_EXT_PTR_XILINX, sizeof(int) * 8192, &hostBufferExt, &err));
+		hostMemDebug = (int*)q.enqueueMapBuffer(hostMemDebugBuffer, CL_TRUE, CL_MAP_WRITE, 0, sizeof(int) * 8192, nullptr, nullptr, &err);
+		memset(hostMemDebug, 0, sizeof(int) * 8192);
+	}else{
+		OCL_CHECK(err, hostMemDebugBuffer = cl::Buffer(context, CL_MEM_USE_HOST_PTR | CL_MEM_READ_WRITE, sizeof(int) * 8192, hostMemDebug, &err));
+		OCL_CHECK(err, err = q.enqueueMigrateMemObjects({hostMemDebugBuffer}, 0));
+		OCL_CHECK(err, err = q.finish());
+	}
 
     OCL_CHECK(err, err = messageKernel.setArg(0, hostMemDebugBuffer));
     if(configuration["_HOST_ENABLE_DEBUG"].GetBool()){
@@ -487,9 +501,6 @@ bool solve(std::string xclBinFile, std::string inputFilePath, std::string output
     }else{
         OCL_CHECK(err, err = messageKernel.setArg(1, false));
     }
-
-    int* hostMemDebug = (int*)q.enqueueMapBuffer(hostMemDebugBuffer, CL_TRUE, CL_MAP_WRITE, 0, sizeof(int) * 8192, nullptr, nullptr, &err);
-    memset(hostMemDebug,0,sizeof(int)*8192);
 
     cl::Buffer clsStoreBuffer;
     cl::Buffer usedClsIDBucketsBuffer;
@@ -502,11 +513,14 @@ bool solve(std::string xclBinFile, std::string inputFilePath, std::string output
     cl::Buffer clsStatesBuffer;
     cl::Buffer miscBuffer;
 
-    unsigned int trackLBDCount[2*_FPGA_MAX_LBD_BUCKETS];
+    std::vector<unsigned int, aligned_allocator<unsigned int>> trackLBDCount(
+        2 * _FPGA_MAX_LBD_BUCKETS, 0);
+    std::vector<int, aligned_allocator<int>> miscCounters(
+        pd.md.miscCounters, pd.md.miscCounters + 256);
 
     OCL_CHECK(err, clsStoreBuffer = cl::Buffer(context, CL_MEM_USE_HOST_PTR | CL_MEM_READ_WRITE, _HOST_MAX_CLAUSE_ELEMENTS * sizeof(cls), pd.clauseStore, &err));
     OCL_CHECK(err, usedClsIDBucketsBuffer = cl::Buffer(context, CL_MEM_HOST_NO_ACCESS | CL_MEM_READ_WRITE, _FPGA_MAX_LBD_BUCKETS*_FPGA_MAX_CLAUSES*sizeof(unsigned int), nullptr, &err));
-    OCL_CHECK(err, trackLBDCountBuffer = cl::Buffer(context, CL_MEM_USE_HOST_PTR | CL_MEM_READ_WRITE, _FPGA_MAX_LBD_BUCKETS*2*sizeof(unsigned int), trackLBDCount, &err));
+    OCL_CHECK(err, trackLBDCountBuffer = cl::Buffer(context, CL_MEM_USE_HOST_PTR | CL_MEM_READ_WRITE, _FPGA_MAX_LBD_BUCKETS*2*sizeof(unsigned int), trackLBDCount.data(), &err));
    
     OCL_CHECK(err, cmdBuffer = cl::Buffer(context, CL_MEM_USE_HOST_PTR | CL_MEM_READ_WRITE, _FPGA_MAX_CLAUSES * sizeof(clauseMetaData), pd.cmd, &err));
     OCL_CHECK(err, litStoreBuffer = 
@@ -515,7 +529,7 @@ bool solve(std::string xclBinFile, std::string inputFilePath, std::string output
     OCL_CHECK(err, answerStackBuffer = cl::Buffer(context, CL_MEM_USE_HOST_PTR | CL_MEM_READ_WRITE, pd.md.numLiterals * sizeof(lit), pd.answerStack, &err));
     OCL_CHECK(err, lmdBuffer = cl::Buffer(context, CL_MEM_USE_HOST_PTR | CL_MEM_READ_WRITE, pd.md.numLiterals * sizeof(literalMetaDataPCIE), pd.lmd, &err));
     OCL_CHECK(err, clsStatesBuffer = cl::Buffer(context, CL_MEM_USE_HOST_PTR | CL_MEM_READ_WRITE, _FPGA_MAX_CLAUSES * sizeof(clsStatePCIE), pd.clsStates, &err));
-    OCL_CHECK(err, miscBuffer = cl::Buffer(context, CL_MEM_USE_HOST_PTR | CL_MEM_READ_WRITE, sizeof(int)*256, pd.md.miscCounters, &err));
+    OCL_CHECK(err, miscBuffer = cl::Buffer(context, CL_MEM_USE_HOST_PTR | CL_MEM_READ_WRITE, sizeof(int)*256, miscCounters.data(), &err));
 
     argN=0;
     OCL_CHECK(err, err = clsStoreKernel.setArg(argN++, clsStoreBuffer));
@@ -564,7 +578,7 @@ bool solve(std::string xclBinFile, std::string inputFilePath, std::string output
     unsigned int oldIteration = 0;
     unsigned int stuckCount = 0;
 
-    if(configuration["_HOST_ENABLE_DEBUG"].GetBool()){
+    if(configuration["_HOST_ENABLE_DEBUG"].GetBool() && useHostOnlyDebug){
         std::cout << "\n\n\n\n";
 
         while(((volatile int*)hostMemDebug)[0] == 0){
@@ -601,6 +615,8 @@ bool solve(std::string xclBinFile, std::string inputFilePath, std::string output
         }
 
         std::cout << "FINISHED: " << ((volatile int*)hostMemDebug)[0] << "\n";
+	}else if(configuration["_HOST_ENABLE_DEBUG"].GetBool()){
+		std::cout << "Live debug polling is unavailable on this platform; debug data will be read after kernel completion.\n";
     }
 
     evt.wait();
@@ -614,7 +630,11 @@ bool solve(std::string xclBinFile, std::string inputFilePath, std::string output
     OCL_CHECK(err, err = q.finish());
 
     OCL_CHECK(err, err = q.enqueueMigrateMemObjects({answerStackBuffer, miscBuffer, trackLBDCountBuffer}, CL_MIGRATE_MEM_OBJECT_HOST));
+	if(!useHostOnlyDebug){
+		OCL_CHECK(err, err = q.enqueueMigrateMemObjects({hostMemDebugBuffer}, CL_MIGRATE_MEM_OBJECT_HOST));
+	}
     OCL_CHECK(err, err = q.finish());
+    std::copy(miscCounters.begin(), miscCounters.end(), pd.md.miscCounters);
 
 
     uint64_t executionTime = evt.getProfilingInfo<CL_PROFILING_COMMAND_END>() - evt.getProfilingInfo<CL_PROFILING_COMMAND_START>();

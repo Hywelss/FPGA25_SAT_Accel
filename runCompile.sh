@@ -7,8 +7,8 @@ GN='\033[0;32m'
 CY='\033[0;36m'
 NC='\033[0m'
 
-COMMAND="$1"
-FREQ_SC=235
+COMMAND="${1:-help}"
+FREQ_SC="${FREQ_SC:-}"
 FREQ=()
 FREQ[0]=250000000
 FREQ[1]=250000000
@@ -19,9 +19,9 @@ FREQ[5]=200000000
 FREQ[6]=200000000
 EMU_TYPE=sw_emu
 LIB_EMU_TYPE=-lxrt_swemu
-VER=2022.2
+VER="${VER:-2022.2}"
 EN_PROF=""
-PLATFORM=xilinx_u55c_gen3x16_xdma_3_202210_1
+PLATFORM="${PLATFORM:-xilinx_vck5000_gen4x8_qdma_2_202220_1}"
 
 OPENCL_FILES_CPP="host.cpp xcl2.cpp"
 OPENCL_FILES_OBJ="host.o xcl2.o"
@@ -43,22 +43,45 @@ VITIS_HLS_KERNEL[4]="timer"
 VITIS_HLS_KERNEL[5]="pqHandler"
 VITIS_HLS_KERNEL[6]="message"
 
-VITIS_INCLUDE="/opt/xilinx/tools/Vitis_HLS/$VER/include"
-XRT_INCLUDE="/opt/xilinx/xrt/include"
+VITIS_ROOT="${VITIS_ROOT:-/tools/Xilinx/Vitis/$VER}"
+VITIS_HLS_ROOT="${VITIS_HLS_ROOT:-/tools/Xilinx/Vitis_HLS/$VER}"
+XRT_ROOT="${XRT_ROOT:-/opt/xilinx/xrt}"
+VITIS_INCLUDE="${VITIS_INCLUDE:-$VITIS_HLS_ROOT/include}"
+XRT_INCLUDE="${XRT_INCLUDE:-$XRT_ROOT/include}"
 
 DATA_PATH="/home/milo168/Desktop/SAT_workspace/SAT_test_cases"
 
-CONNECTIVITY="k2k.cfg"
+case "$PLATFORM" in
+	*vck5000*)
+		CONNECTIVITY="${CONNECTIVITY:-k2k_vck5000.cfg}"
+		SUPPORTS_HW_EMU=0
+		PLATFORM_DEFINE="-DFPGA_VCK5000"
+		FREQ_SC="${FREQ_SC:-220}"
+		;;
+	*)
+		CONNECTIVITY="${CONNECTIVITY:-k2k.cfg}"
+		SUPPORTS_HW_EMU=1
+		PLATFORM_DEFINE=""
+		FREQ_SC="${FREQ_SC:-235}"
+		;;
+esac
 
-#TODO: YOU MUST POINT TO YOUR XRT AND VITIS_HLS INSTALL PATH
-source /opt/xilinx/xrt/setup.sh
-source /opt/xilinx/tools/Vitis_HLS/$VER/settings64.sh
+if [[ ! -f "$XRT_ROOT/setup.sh" || ! -f "$VITIS_ROOT/settings64.sh" ]]
+then
+	echo -e "${RD}XRT or Vitis setup script was not found.${NC}"
+	echo "Set XRT_ROOT, VITIS_ROOT and VITIS_HLS_ROOT for this machine."
+	exit 1
+fi
+
+source "$XRT_ROOT/setup.sh"
+source "$VITIS_ROOT/settings64.sh"
 
 compile_opencl(){
 	IS_HW_SIM="-DHW_SIM"
 
 	cd src
 	echo -e "${CY}Running Vitis make for $EMU_TYPE... ${NC}"
+	mkdir -p obj bin
 
 	if [[ $EMU_TYPE == hw_emu ]]
 	then
@@ -74,7 +97,7 @@ compile_opencl(){
 	(set -x; g++ -std=c++17 \
 	-Wall -Wno-unknown-pragmas \
 	-O3 \
-	-DFPGA_DEVICE -DC_KERNEL $IS_HW_SIM \
+	-DFPGA_DEVICE -DC_KERNEL $IS_HW_SIM $PLATFORM_DEFINE \
 	-Irapid_json \
 	-I$XRT_INCLUDE \
 	-I$VITIS_INCLUDE \
@@ -89,7 +112,7 @@ compile_opencl(){
 
 	cd obj
 
-	g++ -o ../bin/test.$EMU_TYPE.out $OPENCL_FILES_OBJ -L/opt/xilinx/xrt/lib -lxilinxopencl -lpthread -lrt -lstdc++ -luuid $LIB_EMU_TYPE
+	g++ -o ../bin/test.$EMU_TYPE.out $OPENCL_FILES_OBJ -L"$XRT_ROOT/lib" -lxilinxopencl -lpthread -lrt -lstdc++ -luuid $LIB_EMU_TYPE
 
 	if [ $? -ne 0 ]
 	then
@@ -103,17 +126,20 @@ compile_opencl(){
 compile_kernel(){
 	## emconfig.json needs to be in same folder as the sw-emu/hw-emu xclbin file
 	cd src
-	emconfigutil --platform $PLATFORM --od emconfig_out
-	cp emconfig_out/emconfig.json bin
+	if [[ $EMU_TYPE != hw ]]
+	then
+		emconfigutil --platform "$PLATFORM" --od emconfig_out
+		cp emconfig_out/emconfig.json bin
+	fi
 
 	PIDS=""
 	FAIL=0
-	extraCommands=""
+	extraCommands="$PLATFORM_DEFINE"
 	(set -x; rm bin/*-$EMU_TYPE.xo bin/workload-$EMU_TYPE.xclbin)
 
 	if [[ $EMU_TYPE == hw_emu || $EMU_TYPE == hw ]]
 	then
-		extraCommands="-DFPGA_HW"
+		extraCommands="$extraCommands -DFPGA_HW"
 		#extraCommands="${extraCommands} --advanced.param compiler.fsanitize=address,memory"
 		#extraCommands="${extraCommands} --advanced.param compiler.deadlockDetection=true"
 	fi
@@ -127,6 +153,7 @@ compile_kernel(){
 		(set -x; g++ -std=c++17 -w -O3 \
 		-I$XRT_INCLUDE \
 		-I$VITIS_INCLUDE \
+		$PLATFORM_DEFINE \
 		-c $VITIS_HLS_CPP_VAL; rm *.o)
 
 		if [ $? -ne 0 ]
@@ -219,7 +246,7 @@ run_program(){
 	cd ../../
 }
 
-if [[ $COMMAND == compilecl ]]
+if [[ $COMMAND == compilecl || $COMMAND == opencl ]]
 then
 
 	EMU_TYPE=sw_emu
@@ -234,6 +261,12 @@ fi
 
 if [[ $COMMAND == compilekernel ]]
 then
+	if [[ $SUPPORTS_HW_EMU -eq 0 ]]
+	then
+		echo -e "${RD}$PLATFORM does not support hardware emulation.${NC}"
+		echo "Use './runCompile.sh sw_emu' for software emulation or './runCompile.sh hls && ./runCompile.sh hw' for hardware."
+		exit 1
+	fi
 	rm -rf _x
 	EMU_TYPE=hw_emu
 	#EN_PROF="--profile.data all:all:all --profile.exec all:all"
@@ -260,20 +293,37 @@ then
 	compile_kernel
 	run_program
 
-	EMU_TYPE=hw_emu	
+	if [[ $SUPPORTS_HW_EMU -eq 1 ]]
+	then
+		EMU_TYPE=hw_emu
+		compile_opencl
+		compile_kernel
+		run_program
+	else
+		echo -e "${CY}Skipping hardware emulation because $PLATFORM does not support it.${NC}"
+	fi
+
+fi
+
+if [[ $COMMAND == sw_emu ]]
+then
+	rm -rf _x
+	EMU_TYPE=sw_emu
 	compile_opencl
 	compile_kernel
 	run_program
-
 fi
 
 if [[ $COMMAND == hw ]]
 then
-
-	var=$PWD
-	concat="set dirname \"${var}\""
-	sed -i "1s@.*@$concat@" tcl_scripts/phys_opt_loop.tcl
-	sed -i "1s@.*@$concat@" tcl_scripts/post_place_qor.tcl
+	export SAT_ACCEL_ROOT="$PWD"
+	if [[ $PLATFORM == *vck5000* ]]
+	then
+		HW_LINK_OUTPUT="src/bin/workload-hw.xsa"
+	else
+		HW_LINK_OUTPUT="src/bin/workload-hw.xclbin"
+	fi
+	rm -f "$HW_LINK_OUTPUT" src/bin/workload-hw.xclbin
 
 	v++ -l -t hw \
 	--config src/$CONNECTIVITY \
@@ -293,7 +343,27 @@ then
 	src/bin/workload-${VITIS_HLS_KERNEL[4]}-hw.xo \
 	src/bin/workload-${VITIS_HLS_KERNEL[5]}-hw.xo \
 	src/bin/workload-${VITIS_HLS_KERNEL[6]}-hw.xo \
-	-o src/bin/workload-hw.xclbin
+	-o "$HW_LINK_OUTPUT"
+
+	if [[ $? -ne 0 || ! -s "$HW_LINK_OUTPUT" ]]
+	then
+		echo -e "${RD}Hardware link failed to produce $HW_LINK_OUTPUT${NC}"
+		exit 1
+	fi
+
+	if [[ $PLATFORM == *vck5000* ]]
+	then
+		v++ -p -t hw \
+		--platform "$PLATFORM" \
+		"$HW_LINK_OUTPUT" \
+		-o src/bin/workload-hw.xclbin
+
+		if [[ $? -ne 0 || ! -s src/bin/workload-hw.xclbin ]]
+		then
+			echo -e "${RD}VCK5000 packaging failed to produce workload-hw.xclbin${NC}"
+			exit 1
+		fi
+	fi
 
 	#--vivado.prop run.impl_1.STEPS.OPT_DESIGN.TCL.PRE=tcl_scripts/constrain_blocks.tcl \
 
@@ -337,5 +407,13 @@ then
 	echo -e "${CY}Copying Vitis HLS reports for ${VITIS_HLS_KERNEL[6]} kernel... ${NC}"
 	cp _x/workload-${VITIS_HLS_KERNEL[6]}-hw/${VITIS_HLS_KERNEL[6]}/${VITIS_HLS_KERNEL[6]}/solution/syn/report/*.rpt FPGArpt/
 
+	exit 0
+fi
+
+if [[ $COMMAND == help || $COMMAND == -h || $COMMAND == --help ]]
+then
+	echo "Usage: $0 {hls|hw|opencl|compilecl|sw_emu|compilekernel|run|doall}"
+	echo "Default platform: $PLATFORM"
+	echo "Override with PLATFORM=<platform> and CONNECTIVITY=<config>."
 	exit 0
 fi

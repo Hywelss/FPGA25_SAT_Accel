@@ -29,7 +29,14 @@
 
 //REQUIRES FPGA BITSTREAM RECOMPILE
 //MUST BE MULTIPLE OF 16
+#if defined(FPGA_VCK5000)
+// VCK5000 has 463 URAMs versus the 960 URAMs on the original U55C target.
+// Halving the literal/clauses store capacity keeps the complete design within
+// the VCK5000 URAM budget while preserving the solver architecture.
+#define _FPGA_MAX_LITERAL_ELEMENTS (128*4096)
+#else
 #define _FPGA_MAX_LITERAL_ELEMENTS (256*4096)
+#endif
 #define _HOST_MAX_LITERAL_ELEMENTS _FPGA_MAX_LITERAL_ELEMENTS
 #define _HOST_MAX_CLAUSE_ELEMENTS _HOST_MAX_LITERAL_ELEMENTS
 
