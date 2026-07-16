@@ -188,7 +188,6 @@ void parseDIMACS(std::string filePath, problemData& pd, const rapidjson::Documen
     memset(pd.clauseStore,0,_HOST_MAX_CLAUSE_ELEMENTS*sizeof(cls));
 
     unsigned int index1D = 0;
-    unsigned int index = 0;
     unsigned int preSolvedCount = 0;
     const auto ensureClauseCapacity = [](unsigned int index, unsigned int required, unsigned int clauseId){
         if(index > _HOST_MAX_CLAUSE_ELEMENTS || required > _HOST_MAX_CLAUSE_ELEMENTS-index){
@@ -198,12 +197,16 @@ void parseDIMACS(std::string filePath, problemData& pd, const rapidjson::Documen
     };
     
     for(unsigned int i = 0; i < clsStore.size(); i++){
+        // Original clauses use a dense, 512-bit-aligned DDR representation.
+        // Learned clauses retain the four-element linked-page URAM format.
+        const unsigned int alignmentFill = (16-(index1D%16))%16;
+        ensureClauseCapacity(index1D, alignmentFill, i+1);
+        index1D += alignmentFill;
+
         pd.cmd[i].addressStart = index1D;
         pd.cmd[i].numElements = clsStore[i].size();
         lit earliestSolved = 0;
         int xorCompact = 0;
-        index = 0;
-        bool needZero = true;
 
         for(unsigned int j = 0; j < clsStore[i].size(); j++){
             ensureClauseCapacity(index1D, 1, i+1);
@@ -215,34 +218,13 @@ void parseDIMACS(std::string filePath, problemData& pd, const rapidjson::Documen
                 preSolvedCount++;
             }
             index1D++;
-            index++;
-            
-            if(index == 4-1){
-                ensureClauseCapacity(index1D, 1, i+1);
-                if(j != clsStore[i].size()-1){
-                    pd.clauseStore[index1D] = index1D + 1;
-                }else{
-                    pd.clauseStore[index1D] = 0;
-                    needZero = false;
-                }
-                index1D++;
-                index = 0;
-            }
-        }
-
-        if(needZero){
-            for(unsigned int j = 0; j < 4-index; j++){
-                ensureClauseCapacity(index1D, 1, i+1);
-                pd.clauseStore[index1D] = 0;
-                index1D++;
-            }
         }
 
         pd.clsStates[i].remainingUnassigned = pd.cmd[i].numElements;
         pd.clsStates[i].compressedList = xorCompact;  
     }
-    if(index1D%configuration["_HOST_CLAUSE_PAGE_SIZE"].GetUint() != 0){
-        unsigned int fill = configuration["_HOST_CLAUSE_PAGE_SIZE"].GetUint() - (index1D%configuration["_HOST_CLAUSE_PAGE_SIZE"].GetUint());
+    if(index1D%16 != 0){
+        unsigned int fill = 16-(index1D%16);
         for(unsigned int j = 0; j < fill; j++){
             ensureClauseCapacity(index1D, 1, pd.md.numClauses);
             pd.clauseStore[index1D] = 0;
@@ -252,6 +234,7 @@ void parseDIMACS(std::string filePath, problemData& pd, const rapidjson::Documen
     pd.md.clauseElements = index1D;
 
     index1D = 0;
+    unsigned int index = 0;
     const auto ensureLiteralCapacity = [](unsigned int index, unsigned int required, unsigned int literalId){
         if(index > _HOST_MAX_LITERAL_ELEMENTS || required > _HOST_MAX_LITERAL_ELEMENTS-index){
             std::cout << "WENT OVER ALLOCATION LIMIT - LITERAL: " << literalId << "\n";
@@ -553,6 +536,9 @@ bool solve(std::string xclBinFile, std::string inputFilePath, std::string output
 
     argN=0;
     OCL_CHECK(err, err = clsStoreKernel.setArg(argN++, clsStoreBuffer));
+    // The clause-store kernel exposes two independent 512-bit AXI readers for
+    // original clauses. Both ports address the same DDR-resident buffer.
+    OCL_CHECK(err, err = clsStoreKernel.setArg(argN++, clsStoreBuffer));
     OCL_CHECK(err, err = clsStoreKernel.setArg(argN++, cmdBuffer));
     OCL_CHECK(err, err = clsStoreKernel.setArg(argN++, usedClsIDBucketsBuffer));
     OCL_CHECK(err, err = clsStoreKernel.setArg(argN++, trackLBDCountBuffer));
@@ -694,8 +680,9 @@ bool solve(std::string xclBinFile, std::string inputFilePath, std::string output
     std::cout << "SCALESAT CAPACITY (pressure resets/status checks/min free clause elements/min free clause IDs/min free literal pages): "
         << scalabilityStats[0] << " " << scalabilityStats[1] << " " << scalabilityStats[2] << " "
         << scalabilityStats[3] << " " << scalabilityStats[4] << "\n";
-    std::cout << "SCALESAT COMPILE-TIME LIMITS (learned clause/literal elements/clause elements): "
-        << _FPGA_MAX_LEARN_ELE << " " << _FPGA_MAX_LITERAL_ELEMENTS << " " << _FPGA_MAX_CLAUSE_ELEMENTS << "\n";
+    std::cout << "SCALESAT COMPILE-TIME LIMITS (learned clause/literal URAM/learned-clause URAM/original-clause DDR elements): "
+        << _FPGA_MAX_LEARN_ELE << " " << _FPGA_MAX_LITERAL_ELEMENTS << " "
+        << _FPGA_MAX_CLAUSE_ELEMENTS << " " << _HOST_MAX_CLAUSE_ELEMENTS << "\n";
     std::cout << "ACCESS LIT STORE STATS: " << accessStats[0][0] << " " << accessStats[0][1] << " " << accessStats[1][0] << " " << accessStats[1][1] << "\n";
     std::cout << "STATS (TOTAL, DECISION, RETRY, BACKTRACK, RST): " << pd.md.miscCounters[0] << " " << pd.md.miscCounters[1] << " " << pd.md.miscCounters[2]
         << " " << pd.md.miscCounters[3] << " " << pd.md.miscCounters[4] << "\n";

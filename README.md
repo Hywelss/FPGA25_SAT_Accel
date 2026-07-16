@@ -102,11 +102,14 @@ starts, leaving only 36,072 elements for learned clauses.
 Static fit does not guarantee that an instance can be solved. The baseline
 `vck5000-adaptation` hardware limits are 32,768 variables, 131,072 clauses,
 524,288 literal/clause-store elements, and 1,024 literals in one learned
-clause. The experimental `scalesat-tiered-memory` branch raises the last limit
-to 2,048 and adds proactive capacity-pressure collection, but the original CNF
-still has to fit in the on-chip stores. Difficult searches can exhaust dynamic
-learned-clause pages even when the input itself is small. `testcases.sh` treats
-host exit code 3 as an expected on-chip-memory failure and skips that instance.
+clause. The experimental `scalesat-ddr-clause-tier` branch raises the learned
+clause limit to 2,048 and places immutable original-clause payloads in a
+4,194,304-element (16 MiB) VCK5000 DDR arena. The 524,288-element clause URAM
+is consequently dedicated to learned clauses. Original occurrence lists still
+use the 524,288-element literal URAM and are now the principal static capacity
+limit. Difficult searches can still exhaust dynamic learned-clause or
+learned-occurrence pages. `testcases.sh` treats host exit code 3 as an expected
+capacity failure and skips that instance.
 
 ### VCK5000 measurements
 
@@ -131,10 +134,12 @@ See the benchmark summary and raw logs for the complete measurements.
 
 ## ScaleSAT development
 
-The `scalesat-tiered-memory` branch is an experimental successor to the
+The `scalesat-ddr-clause-tier` branch is an experimental successor to the
 VCK5000 port. Its first phase introduces separate literal/clause capacities,
 pressure-aware learned-clause garbage collection, allocator telemetry, a
 2,048-literal conflict scratchpad on VCK5000, and bounds-safe conflict merging.
+Its second phase streams immutable original clauses from VCK5000 DDR through
+two 512-bit AXI readers while keeping learned clauses in URAM.
 The design and staged DDR/AIE roadmap are documented in
 [`docs/scalesat_architecture.md`](docs/scalesat_architecture.md). A versioned
 128-bit contract for a future asynchronous GNN branching heuristic is under
@@ -155,11 +160,27 @@ Phase-1 verification on VCK5000 (Vitis/XRT 2022.2):
 - the on-board `aalto.dimacs` SAT smoke test passed and reported the new 2,048
   learned-clause limit and capacity telemetry.
 
-The current phase improves safe learned-clause growth and observes allocator
-pressure; it does **not** yet make the input stores larger than 524,288
-elements. The 89.42% URAM occupancy and 176 MHz realized clock reinforce the
-need for the DDR-backed tier in phase 2 instead of further scaling monolithic
-URAM arrays.
+Phase-2 verification on VCK5000 (Vitis/XRT 2022.2):
+
+- both DDR burst-load and lane-unpack loops synthesize at II=1;
+- all 20 SAT/UNSAT software-emulation regressions pass, including original
+  clause payloads of 535,456, 661,952, and 842,240 elements, all above the old
+  524,288-element clause-store limit;
+- hardware link, route, bitstream, DFX package, and xclbin generation complete
+  with zero build errors;
+- the routed design uses 118,602 CLB LUTs (13.18%), 147,373 CLB registers
+  (8.19%), 229.5 BRAM tiles (23.73%), and 414 of 463 URAMs (89.42%);
+- the nominal 220 MHz route has WNS -0.160 ns and no hold violations; Vitis
+  selects a 214 MHz runtime data clock and retains the 500 MHz control clock.
+
+The first board attempt for the medium-difficulty SAT Competition 2021
+`randomG-B-Mix-n15-d05` instance did not reach kernel execution. XRT reported
+a stale CU deadlock; a user hot reset restored `Device Ready`, but the DFX load
+then remained blocked at `Trying to program device`. This is a shared-host/card
+infrastructure block, not a solver result. The new xclbin should be tested on
+`randomG-B-Mix-n15-d05` and `sp5-26-19-bin-nons-tree-noid` after an
+administrative device recovery. The remaining static scalability wall is the
+524,288-element on-chip literal-occurrence store.
 
 To reproduce the successful run from the repository root:
 

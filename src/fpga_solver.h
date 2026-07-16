@@ -47,13 +47,16 @@
 // Halving the literal/clauses store capacity keeps the complete design within
 // the VCK5000 URAM budget while preserving the solver architecture.
 #define _FPGA_MAX_LITERAL_ELEMENTS (128*4096)
+// This is the learned/hot-clause URAM tier. Original clauses remain in DDR and
+// use the larger host/device capacity below.
 #define _FPGA_MAX_CLAUSE_ELEMENTS (128*4096)
+#define _HOST_MAX_CLAUSE_ELEMENTS (1024*4096)
 #else
 #define _FPGA_MAX_LITERAL_ELEMENTS (256*4096)
 #define _FPGA_MAX_CLAUSE_ELEMENTS (256*4096)
+#define _HOST_MAX_CLAUSE_ELEMENTS _FPGA_MAX_CLAUSE_ELEMENTS
 #endif
 #define _HOST_MAX_LITERAL_ELEMENTS _FPGA_MAX_LITERAL_ELEMENTS
-#define _HOST_MAX_CLAUSE_ELEMENTS _FPGA_MAX_CLAUSE_ELEMENTS
 
 //FOR THE CONFIGURATION.JSON FILE:
 

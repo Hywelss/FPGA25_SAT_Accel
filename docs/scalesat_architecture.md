@@ -51,9 +51,61 @@ should be repeated after an administrative device recovery. The host flow
 should also evolve toward one programming operation followed by a batch of CNF
 runs, avoiding repeated DFX loads between benchmark cases.
 
-## Phase 2: tiered clause memory
+## Phase 2: DDR-backed original-clause tier
 
-The target VCK5000 design separates storage by access behavior:
+The current prototype implements the first capacity tier. Original-clause
+payloads are no longer copied into the clause-store URAM at kernel start.
+Instead, the host packs them into a 512-bit-aligned buffer in VCK5000 DDR and
+the clause-store kernel reads them on demand through two independent AXI
+masters. The two readers serve BCP and conflict analysis without sharing an
+HLS memory port. A burst loader and a lane unpacker are connected by a dataflow
+FIFO; both loops synthesize at II=1.
+
+Clause IDs form a stable and inexpensive tier selector: IDs below the original
+clause count refer to the immutable DDR arena, while later IDs refer to learned
+clauses in the existing linked-page URAM store. Learned-clause allocation,
+deletion, LBD buckets, and location updates therefore keep their existing
+low-latency path. The whole 524,288-element clause URAM is now available for
+learned clauses instead of being partially occupied by the input CNF. The
+VCK5000 host-side original-clause arena is 4,194,304 32-bit elements (16 MiB).
+
+The input buffer is allocated by XRT from the `MC_NOC0` device-memory resource.
+Host memory remains the pinned staging tier used to populate that buffer. A
+direct host-memory BCP path is intentionally not used: fine-grained clause
+misses would add PCIe latency to the correctness-critical propagation loop and
+the installed VCK5000 platform exposes device DDR, rather than coherent host
+memory, as its supported kernel capacity tier.
+
+HLS and software-emulation validation completed successfully. All 20
+repository regression cases passed. Three cases now use more original-clause
+payload than the old 524,288-element limit (`qg6-10`: 535,456,
+`bmc-ibm-5`: 661,952, and `nqueens_32`: 842,240), demonstrating that the input
+payload is fetched from DDR rather than hidden behind an enlarged on-chip
+constant.
+
+The VCK5000 hardware build also completed system link, placement, routing,
+bitstream generation, DFX packaging, and xclbin generation with zero build
+errors. The routed design uses 118,602 CLB LUTs (13.18%), 147,373 CLB
+registers (8.19%), 229.5 BRAM tiles (23.73%), and 414/463 URAMs (89.42%). At
+the nominal 220 MHz target the routed design had WNS -0.160 ns and no hold
+violations; Vitis selected a 214 MHz runtime data clock and retained the 500
+MHz kernel/control clock. The added DDR readers therefore did not increase
+URAM usage and the packaged design runs at a higher selected data clock than
+the 176 MHz phase-1 build.
+
+The first medium-difficulty board target was the SAT Competition 2021 Main
+Track instance `randomG-B-Mix-n15-d05`, which previously exhausted learned
+clause pages. It did not reach kernel execution on this shared host: XRT first
+reported a stale CU deadlock, and after a successful user hot reset the DFX
+programming call remained blocked at `Trying to program device`. This is
+recorded as an infrastructure block, not a solver failure or timeout. The
+medium-instance claim therefore remains a software-emulation/capacity target
+until the card receives an administrative recovery and the new xclbin can be
+loaded.
+
+### Next memory steps
+
+The complete target design continues to separate storage by access behavior:
 
 | Data | Fast tier | Capacity tier | Policy |
 |---|---|---|---|
@@ -62,11 +114,13 @@ The target VCK5000 design separates storage by access behavior:
 | Other original/learned clauses | small URAM cache | DDR clause arena | stream/prefetch |
 | Clause metadata and allocator state | banked URAM cache | DDR metadata log | batched writeback |
 
-The DDR representation should use segmented variable-length clauses and stable
-clause IDs. BCP should move toward two watched literals, banked watch queues,
-burst clause fetches, and multiple outstanding NoC requests. Phase 1's separate
-capacity constants and status protocol are the migration boundary for this
-work.
+The implemented DDR arena uses stable clause IDs, 512-bit alignment, burst
+fetches, and multiple outstanding NoC requests. The next capacity wall is the
+URAM occurrence-list store. Moving immutable original occurrences to a compact
+DDR index while retaining learned watch updates in URAM is the next step toward
+larger structural instances. BCP should then move toward two watched literals,
+banked watch queues, request coalescing, and a small low-LBD/original-clause
+cache.
 
 The installed VCK5000 platform describes four DDR4-3200 channels but exposes
 them to Vitis kernels through the aggregate `MC_NOC0` memory tag. The tiered
