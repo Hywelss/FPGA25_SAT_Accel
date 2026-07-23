@@ -53,6 +53,12 @@ DIVERGENCE_HI = float(os.environ.get("DIVERGENCE_HI", 1.7))
 EXIT_MEANING = {
     "0": "solved",
     "3": "on-chip memory exhausted",
+    # host.cpp exits 4 when the kernel's answer disagrees with the expected
+    # SAT/UNSAT result. That is a correctness failure of this build, not a
+    # capacity limit, and it invalidates every timing number from the same
+    # build -- so it is called out separately rather than folded into the
+    # not-solved bucket.
+    "4": "WRONG ANSWER",
     "124": "timeout",
     "137": "timeout (killed)",
     "missing": "input file missing",
@@ -172,6 +178,18 @@ def main():
     lines.append(f"- Instances in paper suite: {len(joined)}")
     lines.append(f"- Solved on this board: {len(solved)}")
     lines.append(f"- Not solved (resource limit / timeout / not run): {len(unsolved)}")
+
+    wrong = [r for r in joined if r["status"] == "WRONG ANSWER"]
+    if wrong:
+        lines.append("")
+        lines.append(
+            f"> **STOP: {len(wrong)} instance(s) returned the wrong SAT/UNSAT answer** "
+            f"({', '.join('`' + r['instance'] + '`' for r in wrong)}). This build is "
+            f"incorrect, so none of the timings below mean anything -- a solver that "
+            f"answers wrongly can answer quickly. Fix correctness before reading any "
+            f"ratio on this page."
+        )
+
     trusted = [
         r
         for r in solved
