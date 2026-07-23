@@ -41,6 +41,15 @@ PAPER_BOARD = "U55C @ 230 MHz"
 # large enough that its rounding no longer dominates.
 RESOLUTION_FLOOR_MS = float(os.environ.get("RESOLUTION_FLOOR_MS", 10))
 
+# max/min across repeats above which a measurement is treated as contaminated.
+NOISE_SPREAD = float(os.environ.get("NOISE_SPREAD", 2.0))
+
+# Ratios this far from 1.0 with a *tight* spread cannot be explained by clock
+# or memory topology; they indicate the halved store changed the clause-deletion
+# schedule and therefore the search path itself.
+DIVERGENCE_LO = float(os.environ.get("DIVERGENCE_LO", 0.7))
+DIVERGENCE_HI = float(os.environ.get("DIVERGENCE_HI", 1.7))
+
 EXIT_MEANING = {
     "0": "solved",
     "3": "on-chip memory exhausted",
@@ -106,6 +115,14 @@ def main():
         code, meaning = status.get(inst, ("not-run", "not run"))
 
         median = statistics.median(times) if times else None
+        fastest = min(times) if times else None
+        slowest = max(times) if times else None
+        # Run-to-run spread. The solver is deterministic -- identical input and
+        # config replay an identical search -- so a wide spread is interference
+        # in the measurement (queueing, contention), not solver behaviour.
+        # Report it, and take the minimum as the least-contaminated estimate.
+        spread = (slowest / fastest) if fastest else None
+
         paper_sa = row["paper_sa_ms"]
         paper_val = None
         if paper_sa not in ("", "NA"):
@@ -113,8 +130,8 @@ def main():
 
         # Ratio is only meaningful when this board actually solved the instance.
         ratio = None
-        if code == "0" and median is not None and paper_val:
-            ratio = median / paper_val
+        if code == "0" and fastest is not None and paper_val:
+            ratio = fastest / paper_val
 
         joined.append(
             {
@@ -126,9 +143,11 @@ def main():
                 "paper_minisat_ms": row["paper_minisat_ms"],
                 "paper_kissat_ms": row["paper_kissat_ms"],
                 "runs": len(times),
-                "board_min_ms": fmt(min(times)) if times else "",
+                "board_min_ms": fmt(fastest),
                 "board_median_ms": fmt(median),
-                "board_max_ms": fmt(max(times)) if times else "",
+                "board_max_ms": fmt(slowest),
+                "spread_max_over_min": fmt(spread, 1),
+                "noisy": "yes" if (spread and spread > NOISE_SPREAD) else "",
                 "status": meaning,
                 "ratio_board_over_paper": fmt(ratio, 2),
             }
@@ -196,20 +215,62 @@ def main():
             f"({CLOCK_MHZ} MHz vs. the paper's 230 MHz). Divide the ratios by "
             f"{230 / 223:.4f} to isolate the architectural difference."
         )
+    noisy = [r for r in solved if r["noisy"]]
+    if noisy:
+        lines.append("")
+        lines.append(
+            f"> {len(noisy)} of {len(solved)} solved instances varied by more than "
+            f"{NOISE_SPREAD:g}x across repeats. The solver is deterministic, so that "
+            f"spread is measurement interference, not solver behaviour. Every ratio "
+            f"here uses the **minimum** across repeats for that reason; the median "
+            f"column is shown only so the contamination stays visible."
+        )
+
+    diverged = [
+        r
+        for r in solved
+        if not r["noisy"]
+        and not (DIVERGENCE_LO <= float(r["ratio_board_over_paper"]) <= DIVERGENCE_HI)
+    ]
+    if diverged:
+        lines.append("")
+        lines.append(
+            f"> {len(diverged)} instances sit outside "
+            f"[{DIVERGENCE_LO:g}x, {DIVERGENCE_HI:g}x] with a tight spread. A lower "
+            f"clock and a narrower memory path cannot make this board faster than the "
+            f"paper's, so these are almost certainly a **different search path**: the "
+            f"halved store changes when clauses are deleted, which changes VSIDS "
+            f"scores and the decision sequence. They measure a different amount of "
+            f"work, not a different speed -- keep them out of any speed claim. "
+            f"Listed in their own table below."
+        )
+
     lines.append("")
     lines.append("## Solved on this board")
     lines.append("")
     lines.append(
-        "| Instance | Lits | Cls | Paper SA (ms) | This board median (ms) | min-max (ms) | Ratio | MiniSat (ms) | Kissat (ms) |"
+        "| Instance | Lits | Cls | Paper SA (ms) | This board min (ms) | median | spread | Ratio (min) | MiniSat (ms) | Kissat (ms) |"
     )
-    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|")
+    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
     for r in sorted(solved, key=lambda r: -float(r["ratio_board_over_paper"])):
+        flag = " ⚠" if r["noisy"] else ""
         lines.append(
             f"| `{r['instance']}` | {r['lits']} | {r['cls']} | {r['paper_sa_ms']} | "
-            f"{r['board_median_ms']} | {r['board_min_ms']} - {r['board_max_ms']} | "
+            f"{r['board_min_ms']} | {r['board_median_ms']} | {r['spread_max_over_min']}x{flag} | "
             f"{r['ratio_board_over_paper']}x | {r['paper_minisat_ms']} | {r['paper_kissat_ms']} |"
         )
     lines.append("")
+    if diverged:
+        lines.append("## Suspected search-path divergence (exclude from speed claims)")
+        lines.append("")
+        lines.append("| Instance | Paper SA (ms) | This board min (ms) | Ratio |")
+        lines.append("|---|---:|---:|---:|")
+        for r in sorted(diverged, key=lambda r: float(r["ratio_board_over_paper"])):
+            lines.append(
+                f"| `{r['instance']}` | {r['paper_sa_ms']} | {r['board_min_ms']} | "
+                f"{r['ratio_board_over_paper']}x |"
+            )
+        lines.append("")
     lines.append("## Not solved on this board")
     lines.append("")
     lines.append("| Instance | Lits | Cls | Paper SA (ms) | Status |")
