@@ -34,6 +34,13 @@ BOARD = os.environ.get("BOARD", "VCK5000")
 CLOCK_MHZ = os.environ.get("CLOCK_MHZ", "223")
 PAPER_BOARD = "U55C @ 230 MHz"
 
+# The paper prints SAT-Accel times to one or two significant figures, so a
+# printed "1" can be anything in [0.5, 1.5). Ratios against such values carry
+# ~50% error from rounding alone. Aggregates are therefore reported twice:
+# over everything solved, and over the subset where the paper's own value is
+# large enough that its rounding no longer dominates.
+RESOLUTION_FLOOR_MS = float(os.environ.get("RESOLUTION_FLOOR_MS", 10))
+
 EXIT_MEANING = {
     "0": "solved",
     "3": "on-chip memory exhausted",
@@ -146,17 +153,48 @@ def main():
     lines.append(f"- Instances in paper suite: {len(joined)}")
     lines.append(f"- Solved on this board: {len(solved)}")
     lines.append(f"- Not solved (resource limit / timeout / not run): {len(unsolved)}")
+    trusted = [
+        r
+        for r in solved
+        if r["paper_sa_ms"] not in ("", "NA")
+        and float(r["paper_sa_ms"]) >= RESOLUTION_FLOOR_MS
+    ]
+    trusted_ratios = [float(r["ratio_board_over_paper"]) for r in trusted]
+
     if ratios:
         lines.append(
-            f"- Slowdown vs. paper over the solved set: "
-            f"geometric-mean-free median {statistics.median(ratios):.2f}x, "
+            f"- Ratio vs. paper, all {len(ratios)} solved: "
+            f"median {statistics.median(ratios):.2f}x, "
             f"min {min(ratios):.2f}x, max {max(ratios):.2f}x"
+        )
+        if trusted_ratios:
+            lines.append(
+                f"- **Ratio vs. paper, {len(trusted_ratios)} instances with paper time "
+                f">= {RESOLUTION_FLOOR_MS:g} ms: "
+                f"median {statistics.median(trusted_ratios):.2f}x, "
+                f"min {min(trusted_ratios):.2f}x, max {max(trusted_ratios):.2f}x** "
+                f"<- use this one"
+            )
+        else:
+            lines.append(
+                f"- No solved instance has a paper time >= {RESOLUTION_FLOOR_MS:g} ms, "
+                f"so every ratio above is dominated by the paper's rounding."
+            )
+        lines.append("")
+        lines.append(
+            "> Two caveats on the numbers above. **Rounding:** the paper prints "
+            "SAT-Accel times to one or two significant figures, so a printed `1` "
+            "means somewhere in [0.5, 1.5) and a ratio against it carries ~50% "
+            "error by itself -- this is why the restricted aggregate exists. "
+            "**Coverage:** ratios cover only what this board solved; until that "
+            "set covers the paper's set, this is not a like-for-like reproduction "
+            "of the paper's average speedup."
         )
         lines.append("")
         lines.append(
-            "> Coverage caveat: the ratio above is computed only over instances this "
-            "board solved. It is not a like-for-like reproduction of the paper's "
-            "average speedup until the solved set covers the paper's set."
+            f"> Clock accounts for a known {(1 - 223 / 230) * 100:.1f}% of any slowdown "
+            f"({CLOCK_MHZ} MHz vs. the paper's 230 MHz). Divide the ratios by "
+            f"{230 / 223:.4f} to isolate the architectural difference."
         )
     lines.append("")
     lines.append("## Solved on this board")
