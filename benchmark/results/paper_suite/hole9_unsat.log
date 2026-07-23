@@ -1,0 +1,28 @@
+=== hole9_unsat run 1/5 ===
+/home/hanwen/FPGA25_SAT_Accel/src/bin/test.real.out /home/hanwen/FPGA25_SAT_Accel/src/bin/workload-hw.xclbin /home/hanwen/FPGA25_SAT_Accel/src/configuration.json /home/hanwen/FPGA25_SAT_Accel/SAT_test_cases/satlib/hole9_unsat.cnf /home/hanwen/FPGA25_SAT_Accel/benchmark/results/paper_suite/hole9_unsat.csv 0 
+INPUT CHECK: ABSOLUTE LITERALS: 0/90 PRESOLVED COUNT: 0/415 NUMBER OF ELEMENTS: 2880 1740
+DISTRIBUTION OF MEMORY: 
+(0,0),(1,90),(2,0),(3,0),(4,0),(5,0),(6,0),(7,0),(8,0),(9,0),(10,0),(11,0),(12,0),(13,0),(14,0),(15,0),(16,0),(17,0),
+(0,0),(1,0),(2,0),(3,0),(4,0),(5,0),(6,0),(7,0),(8,0),(9,90),(10,0),(11,0),(12,0),(13,0),(14,0),(15,0),(16,0),(17,0),
+Found Platform
+Platform Name: Xilinx
+INFO: Reading /home/hanwen/FPGA25_SAT_Accel/src/bin/workload-hw.xclbin
+Loading: '/home/hanwen/FPGA25_SAT_Accel/src/bin/workload-hw.xclbin'
+Trying to program device[0]: xilinx_vck5000_gen4x8_qdma_base_2
+Device[0]: program successful!
+
+
+
+TRIP COUNT FOR LEARNING (iteration/mergecount): 421309 8337295
+TRIP COUNT FOR MINIMIZE (iteration/mergecount/simplified): 866180 9998760 29615
+STATS FOR LONGEST CLAUSE (longest clause/longest simplified): 71 64
+AVERAGE LATENCY FOR BCP CHECK VAR: 780119 276.897
+ZEROING OVEHREAD: 639688
+CLEAR STREAM OVERHEAD: 213787
+ACCESS LIT STORE STATS: 780119 780068 73234200 73386472
+STATS (TOTAL, DECISION, RETRY, BACKTRACK, RST): 150437 62028 44141 44268 126
+STATS FOR CLAUSE LBD SCORE: (2) 4 (3) 30 (4) 86 (5) 204 (6) 370 (7) 510 (8) 457 (9) 487 (10) 554 (11) 41565 
+STATS FOR CLAUSE REMOVAL LBD SCORE: (2) 0 (3) 0 (4) 0 (5) 0 (6) 0 (7) 0 (8) 0 (9) 290 (10) 535 (11) 31419 
+CYCLE COUNTERS (COPY, PQ-FIND, BRANCH, LEARN, LEARN_MIN, SAVE, RESIZE, BACKTRACK, DELETE): 530 1,522,579 216,012,291 29,763,095 145,636,559 3,257,785 975,338 0 7,126,636
+Kernel execution time: 0 (min) 1 (s) 835 (ms) 652 (us) RAW: 1835652484
+ERROR DURING CLAUSE LEARNING ALLOCATION: -4

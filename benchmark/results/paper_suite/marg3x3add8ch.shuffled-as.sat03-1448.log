@@ -1,0 +1,28 @@
+=== marg3x3add8ch.shuffled-as.sat03-1448 run 1/5 ===
+/home/hanwen/FPGA25_SAT_Accel/src/bin/test.real.out /home/hanwen/FPGA25_SAT_Accel/src/bin/workload-hw.xclbin /home/hanwen/FPGA25_SAT_Accel/src/configuration.json /home/hanwen/FPGA25_SAT_Accel/SAT_test_cases/unsat/marg3x3add8ch.shuffled-as.sat03-1448.cnf /home/hanwen/FPGA25_SAT_Accel/benchmark/results/paper_suite/marg3x3add8ch.shuffled-as.sat03-1448.csv 0 
+INPUT CHECK: ABSOLUTE LITERALS: 0/41 PRESOLVED COUNT: 0/272 NUMBER OF ELEMENTS: 2176 2112
+DISTRIBUTION OF MEMORY: 
+(0,0),(1,0),(2,0),(3,0),(4,0),(5,0),(6,0),(7,0),(8,0),(9,0),(10,9),(11,0),(12,6),(13,0),(14,0),(15,0),(16,3),(17,23),
+(0,0),(1,0),(2,0),(3,0),(4,0),(5,0),(6,0),(7,0),(8,0),(9,0),(10,9),(11,0),(12,6),(13,0),(14,0),(15,0),(16,3),(17,23),
+Found Platform
+Platform Name: Xilinx
+INFO: Reading /home/hanwen/FPGA25_SAT_Accel/src/bin/workload-hw.xclbin
+Loading: '/home/hanwen/FPGA25_SAT_Accel/src/bin/workload-hw.xclbin'
+Trying to program device[0]: xilinx_vck5000_gen4x8_qdma_base_2
+Device[0]: program successful!
+
+
+
+TRIP COUNT FOR LEARNING (iteration/mergecount): 1134806 17249099
+TRIP COUNT FOR MINIMIZE (iteration/mergecount/simplified): 930737 8411837 114735
+STATS FOR LONGEST CLAUSE (longest clause/longest simplified): 24 23
+AVERAGE LATENCY FOR BCP CHECK VAR: 1389280 285.126
+ZEROING OVEHREAD: 1086695
+CLEAR STREAM OVERHEAD: 273526
+ACCESS LIT STORE STATS: 1389280 1389261 125923116 126230819
+STATS (TOTAL, DECISION, RETRY, BACKTRACK, RST): 668787 275587 196345 196855 509
+STATS FOR CLAUSE LBD SCORE: (2) 7 (3) 124 (4) 747 (5) 2955 (6) 7563 (7) 14099 (8) 20647 (9) 24641 (10) 26827 (11) 99244 
+STATS FOR CLAUSE REMOVAL LBD SCORE: (2) 0 (3) 0 (4) 0 (5) 1736 (6) 7048 (7) 13186 (8) 19152 (9) 22414 (10) 23898 (11) 93265 
+CYCLE COUNTERS (COPY, PQ-FIND, BRANCH, LEARN, LEARN_MIN, SAVE, RESIZE, BACKTRACK, DELETE): 376 6,673,178 396,119,573 73,880,839 259,022,363 10,505,428 3,198,343 0 17,984,989
+Kernel execution time: 0 (min) 3 (s) 537 (ms) 617 (us) RAW: 3537617762
+ERROR DURING CLAUSE LEARNING ALLOCATION: -4

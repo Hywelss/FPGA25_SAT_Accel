@@ -1,0 +1,135 @@
+=== marg3x3add8.shuffled-as.sat03-1449 run 1/5 ===
+/home/hanwen/FPGA25_SAT_Accel/src/bin/test.real.out /home/hanwen/FPGA25_SAT_Accel/src/bin/workload-hw.xclbin /home/hanwen/FPGA25_SAT_Accel/src/configuration.json /home/hanwen/FPGA25_SAT_Accel/SAT_test_cases/unsat/marg3x3add8.shuffled-as.sat03-1449.cnf /home/hanwen/FPGA25_SAT_Accel/benchmark/results/paper_suite/marg3x3add8.shuffled-as.sat03-1449.csv 0 
+INPUT CHECK: ABSOLUTE LITERALS: 0/41 PRESOLVED COUNT: 0/224 NUMBER OF ELEMENTS: 1856 1792
+DISTRIBUTION OF MEMORY: 
+(0,0),(1,0),(2,0),(3,0),(4,0),(5,0),(6,0),(7,0),(8,8),(9,0),(10,0),(11,0),(12,16),(13,0),(14,0),(15,0),(16,17),(17,0),
+(0,0),(1,0),(2,0),(3,0),(4,0),(5,0),(6,0),(7,0),(8,8),(9,0),(10,0),(11,0),(12,16),(13,0),(14,0),(15,0),(16,17),(17,0),
+Found Platform
+Platform Name: Xilinx
+INFO: Reading /home/hanwen/FPGA25_SAT_Accel/src/bin/workload-hw.xclbin
+Loading: '/home/hanwen/FPGA25_SAT_Accel/src/bin/workload-hw.xclbin'
+Trying to program device[0]: xilinx_vck5000_gen4x8_qdma_base_2
+Device[0]: program successful!
+
+
+
+TRIP COUNT FOR LEARNING (iteration/mergecount): 224487 3255075
+TRIP COUNT FOR MINIMIZE (iteration/mergecount/simplified): 184810 1538263 20349
+STATS FOR LONGEST CLAUSE (longest clause/longest simplified): 24 22
+AVERAGE LATENCY FOR BCP CHECK VAR: 274403 174.816
+ZEROING OVEHREAD: 217691
+CLEAR STREAM OVERHEAD: 57074
+ACCESS LIT STORE STATS: 274403 274390 14518212 14570688
+STATS (TOTAL, DECISION, RETRY, BACKTRACK, RST): 135185 54775 40138 40272 126
+STATS FOR CLAUSE LBD SCORE: (2) 71 (3) 349 (4) 1249 (5) 3072 (6) 5335 (7) 6799 (8) 6324 (9) 5114 (10) 4019 (11) 7932 
+STATS FOR CLAUSE REMOVAL LBD SCORE: (2) 0 (3) 0 (4) 0 (5) 1168 (6) 4153 (7) 5646 (8) 5385 (9) 4318 (10) 3673 (11) 7901 
+CYCLE COUNTERS (COPY, PQ-FIND, BRANCH, LEARN, LEARN_MIN, SAVE, RESIZE, BACKTRACK, DELETE): 353 1,313,752 47,969,979 14,385,498 30,438,329 2,058,531 622,372 0 2,978,091
+Kernel execution time: 0 (min) 0 (s) 466 (ms) 811 (us) RAW: 466811770
+=== marg3x3add8.shuffled-as.sat03-1449 run 2/5 ===
+/home/hanwen/FPGA25_SAT_Accel/src/bin/test.real.out /home/hanwen/FPGA25_SAT_Accel/src/bin/workload-hw.xclbin /home/hanwen/FPGA25_SAT_Accel/src/configuration.json /home/hanwen/FPGA25_SAT_Accel/SAT_test_cases/unsat/marg3x3add8.shuffled-as.sat03-1449.cnf /home/hanwen/FPGA25_SAT_Accel/benchmark/results/paper_suite/marg3x3add8.shuffled-as.sat03-1449.csv 0 
+INPUT CHECK: ABSOLUTE LITERALS: 0/41 PRESOLVED COUNT: 0/224 NUMBER OF ELEMENTS: 1856 1792
+DISTRIBUTION OF MEMORY: 
+(0,0),(1,0),(2,0),(3,0),(4,0),(5,0),(6,0),(7,0),(8,8),(9,0),(10,0),(11,0),(12,16),(13,0),(14,0),(15,0),(16,17),(17,0),
+(0,0),(1,0),(2,0),(3,0),(4,0),(5,0),(6,0),(7,0),(8,8),(9,0),(10,0),(11,0),(12,16),(13,0),(14,0),(15,0),(16,17),(17,0),
+Found Platform
+Platform Name: Xilinx
+INFO: Reading /home/hanwen/FPGA25_SAT_Accel/src/bin/workload-hw.xclbin
+Loading: '/home/hanwen/FPGA25_SAT_Accel/src/bin/workload-hw.xclbin'
+Trying to program device[0]: xilinx_vck5000_gen4x8_qdma_base_2
+Device[0]: program successful!
+
+
+
+TRIP COUNT FOR LEARNING (iteration/mergecount): 224487 3255075
+TRIP COUNT FOR MINIMIZE (iteration/mergecount/simplified): 184810 1538263 20349
+STATS FOR LONGEST CLAUSE (longest clause/longest simplified): 24 22
+AVERAGE LATENCY FOR BCP CHECK VAR: 274403 174.816
+ZEROING OVEHREAD: 217691
+CLEAR STREAM OVERHEAD: 57074
+ACCESS LIT STORE STATS: 274403 274390 14518212 14570688
+STATS (TOTAL, DECISION, RETRY, BACKTRACK, RST): 135185 54775 40138 40272 126
+STATS FOR CLAUSE LBD SCORE: (2) 71 (3) 349 (4) 1249 (5) 3072 (6) 5335 (7) 6799 (8) 6324 (9) 5114 (10) 4019 (11) 7932 
+STATS FOR CLAUSE REMOVAL LBD SCORE: (2) 0 (3) 0 (4) 0 (5) 1168 (6) 4153 (7) 5646 (8) 5385 (9) 4318 (10) 3673 (11) 7901 
+CYCLE COUNTERS (COPY, PQ-FIND, BRANCH, LEARN, LEARN_MIN, SAVE, RESIZE, BACKTRACK, DELETE): 353 1,313,752 47,969,979 14,385,498 30,438,329 2,058,531 622,372 0 2,978,012
+Kernel execution time: 0 (min) 0 (s) 466 (ms) 830 (us) RAW: 466830821
+=== marg3x3add8.shuffled-as.sat03-1449 run 3/5 ===
+/home/hanwen/FPGA25_SAT_Accel/src/bin/test.real.out /home/hanwen/FPGA25_SAT_Accel/src/bin/workload-hw.xclbin /home/hanwen/FPGA25_SAT_Accel/src/configuration.json /home/hanwen/FPGA25_SAT_Accel/SAT_test_cases/unsat/marg3x3add8.shuffled-as.sat03-1449.cnf /home/hanwen/FPGA25_SAT_Accel/benchmark/results/paper_suite/marg3x3add8.shuffled-as.sat03-1449.csv 0 
+INPUT CHECK: ABSOLUTE LITERALS: 0/41 PRESOLVED COUNT: 0/224 NUMBER OF ELEMENTS: 1856 1792
+DISTRIBUTION OF MEMORY: 
+(0,0),(1,0),(2,0),(3,0),(4,0),(5,0),(6,0),(7,0),(8,8),(9,0),(10,0),(11,0),(12,16),(13,0),(14,0),(15,0),(16,17),(17,0),
+(0,0),(1,0),(2,0),(3,0),(4,0),(5,0),(6,0),(7,0),(8,8),(9,0),(10,0),(11,0),(12,16),(13,0),(14,0),(15,0),(16,17),(17,0),
+Found Platform
+Platform Name: Xilinx
+INFO: Reading /home/hanwen/FPGA25_SAT_Accel/src/bin/workload-hw.xclbin
+Loading: '/home/hanwen/FPGA25_SAT_Accel/src/bin/workload-hw.xclbin'
+Trying to program device[0]: xilinx_vck5000_gen4x8_qdma_base_2
+Device[0]: program successful!
+
+
+
+TRIP COUNT FOR LEARNING (iteration/mergecount): 224487 3255075
+TRIP COUNT FOR MINIMIZE (iteration/mergecount/simplified): 184810 1538263 20349
+STATS FOR LONGEST CLAUSE (longest clause/longest simplified): 24 22
+AVERAGE LATENCY FOR BCP CHECK VAR: 274403 174.816
+ZEROING OVEHREAD: 217691
+CLEAR STREAM OVERHEAD: 57074
+ACCESS LIT STORE STATS: 274403 274390 14518212 14570688
+STATS (TOTAL, DECISION, RETRY, BACKTRACK, RST): 135185 54775 40138 40272 126
+STATS FOR CLAUSE LBD SCORE: (2) 71 (3) 349 (4) 1249 (5) 3072 (6) 5335 (7) 6799 (8) 6324 (9) 5114 (10) 4019 (11) 7932 
+STATS FOR CLAUSE REMOVAL LBD SCORE: (2) 0 (3) 0 (4) 0 (5) 1168 (6) 4153 (7) 5646 (8) 5385 (9) 4318 (10) 3673 (11) 7901 
+CYCLE COUNTERS (COPY, PQ-FIND, BRANCH, LEARN, LEARN_MIN, SAVE, RESIZE, BACKTRACK, DELETE): 328 1,313,752 47,969,979 14,385,498 30,438,329 2,058,531 622,372 0 2,977,902
+Kernel execution time: 0 (min) 0 (s) 466 (ms) 782 (us) RAW: 466782511
+=== marg3x3add8.shuffled-as.sat03-1449 run 4/5 ===
+/home/hanwen/FPGA25_SAT_Accel/src/bin/test.real.out /home/hanwen/FPGA25_SAT_Accel/src/bin/workload-hw.xclbin /home/hanwen/FPGA25_SAT_Accel/src/configuration.json /home/hanwen/FPGA25_SAT_Accel/SAT_test_cases/unsat/marg3x3add8.shuffled-as.sat03-1449.cnf /home/hanwen/FPGA25_SAT_Accel/benchmark/results/paper_suite/marg3x3add8.shuffled-as.sat03-1449.csv 0 
+INPUT CHECK: ABSOLUTE LITERALS: 0/41 PRESOLVED COUNT: 0/224 NUMBER OF ELEMENTS: 1856 1792
+DISTRIBUTION OF MEMORY: 
+(0,0),(1,0),(2,0),(3,0),(4,0),(5,0),(6,0),(7,0),(8,8),(9,0),(10,0),(11,0),(12,16),(13,0),(14,0),(15,0),(16,17),(17,0),
+(0,0),(1,0),(2,0),(3,0),(4,0),(5,0),(6,0),(7,0),(8,8),(9,0),(10,0),(11,0),(12,16),(13,0),(14,0),(15,0),(16,17),(17,0),
+Found Platform
+Platform Name: Xilinx
+INFO: Reading /home/hanwen/FPGA25_SAT_Accel/src/bin/workload-hw.xclbin
+Loading: '/home/hanwen/FPGA25_SAT_Accel/src/bin/workload-hw.xclbin'
+Trying to program device[0]: xilinx_vck5000_gen4x8_qdma_base_2
+Device[0]: program successful!
+
+
+
+TRIP COUNT FOR LEARNING (iteration/mergecount): 224487 3255075
+TRIP COUNT FOR MINIMIZE (iteration/mergecount/simplified): 184810 1538263 20349
+STATS FOR LONGEST CLAUSE (longest clause/longest simplified): 24 22
+AVERAGE LATENCY FOR BCP CHECK VAR: 274403 174.816
+ZEROING OVEHREAD: 217691
+CLEAR STREAM OVERHEAD: 57074
+ACCESS LIT STORE STATS: 274403 274390 14518212 14570688
+STATS (TOTAL, DECISION, RETRY, BACKTRACK, RST): 135185 54775 40138 40272 126
+STATS FOR CLAUSE LBD SCORE: (2) 71 (3) 349 (4) 1249 (5) 3072 (6) 5335 (7) 6799 (8) 6324 (9) 5114 (10) 4019 (11) 7932 
+STATS FOR CLAUSE REMOVAL LBD SCORE: (2) 0 (3) 0 (4) 0 (5) 1168 (6) 4153 (7) 5646 (8) 5385 (9) 4318 (10) 3673 (11) 7901 
+CYCLE COUNTERS (COPY, PQ-FIND, BRANCH, LEARN, LEARN_MIN, SAVE, RESIZE, BACKTRACK, DELETE): 353 1,313,752 47,969,979 14,385,498 30,438,329 2,058,531 622,372 0 2,977,986
+Kernel execution time: 0 (min) 0 (s) 466 (ms) 776 (us) RAW: 466776611
+=== marg3x3add8.shuffled-as.sat03-1449 run 5/5 ===
+/home/hanwen/FPGA25_SAT_Accel/src/bin/test.real.out /home/hanwen/FPGA25_SAT_Accel/src/bin/workload-hw.xclbin /home/hanwen/FPGA25_SAT_Accel/src/configuration.json /home/hanwen/FPGA25_SAT_Accel/SAT_test_cases/unsat/marg3x3add8.shuffled-as.sat03-1449.cnf /home/hanwen/FPGA25_SAT_Accel/benchmark/results/paper_suite/marg3x3add8.shuffled-as.sat03-1449.csv 0 
+INPUT CHECK: ABSOLUTE LITERALS: 0/41 PRESOLVED COUNT: 0/224 NUMBER OF ELEMENTS: 1856 1792
+DISTRIBUTION OF MEMORY: 
+(0,0),(1,0),(2,0),(3,0),(4,0),(5,0),(6,0),(7,0),(8,8),(9,0),(10,0),(11,0),(12,16),(13,0),(14,0),(15,0),(16,17),(17,0),
+(0,0),(1,0),(2,0),(3,0),(4,0),(5,0),(6,0),(7,0),(8,8),(9,0),(10,0),(11,0),(12,16),(13,0),(14,0),(15,0),(16,17),(17,0),
+Found Platform
+Platform Name: Xilinx
+INFO: Reading /home/hanwen/FPGA25_SAT_Accel/src/bin/workload-hw.xclbin
+Loading: '/home/hanwen/FPGA25_SAT_Accel/src/bin/workload-hw.xclbin'
+Trying to program device[0]: xilinx_vck5000_gen4x8_qdma_base_2
+Device[0]: program successful!
+
+
+
+TRIP COUNT FOR LEARNING (iteration/mergecount): 224487 3255075
+TRIP COUNT FOR MINIMIZE (iteration/mergecount/simplified): 184810 1538263 20349
+STATS FOR LONGEST CLAUSE (longest clause/longest simplified): 24 22
+AVERAGE LATENCY FOR BCP CHECK VAR: 274403 174.816
+ZEROING OVEHREAD: 217691
+CLEAR STREAM OVERHEAD: 57074
+ACCESS LIT STORE STATS: 274403 274390 14518212 14570688
+STATS (TOTAL, DECISION, RETRY, BACKTRACK, RST): 135185 54775 40138 40272 126
+STATS FOR CLAUSE LBD SCORE: (2) 71 (3) 349 (4) 1249 (5) 3072 (6) 5335 (7) 6799 (8) 6324 (9) 5114 (10) 4019 (11) 7932 
+STATS FOR CLAUSE REMOVAL LBD SCORE: (2) 0 (3) 0 (4) 0 (5) 1168 (6) 4153 (7) 5646 (8) 5385 (9) 4318 (10) 3673 (11) 7901 
+CYCLE COUNTERS (COPY, PQ-FIND, BRANCH, LEARN, LEARN_MIN, SAVE, RESIZE, BACKTRACK, DELETE): 328 1,313,752 47,969,979 14,385,498 30,438,329 2,058,531 622,372 0 2,978,100
+Kernel execution time: 0 (min) 0 (s) 466 (ms) 781 (us) RAW: 466781252
