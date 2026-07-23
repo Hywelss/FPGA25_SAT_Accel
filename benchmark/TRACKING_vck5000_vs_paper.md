@@ -61,7 +61,7 @@
 
 ## 3. 论文评测集在仓库中的可用性
 
-论文 Table 4（45 例）+ Table 3（13 例，与 SAT-Hard 对比）= **59 条基线**，
+论文 Table 4（46 例）+ Table 3（13 例，与 SAT-Hard 对比）= **59 条基线**，
 已全部核对存在于 `SAT_test_cases/`（`sat/`、`unsat/`、`satlib/` 三个子目录），
 并且 `testcases.sh` 已经把它们全部列好了。
 
@@ -106,6 +106,31 @@ paper_sa_ms, paper_minisat_ms, paper_kissat_ms, paper_table
   **论文自己算平均加速比时排除了这些行**，我们复算必须沿用同样的排除规则，否则数字对不上。
 - `paper_sa_ms` 为 `NA`：论文标 N/A（`hole9_unsat`，未完成）。
 - `expect`：1 = SAT，0 = UNSAT，传给 `test.real.out` 的最后一个参数做答案校验。
+
+### 比较范围（只比论文表格，不做其他对比）
+
+对比只针对论文 Table 3 / Table 4 里印出来的数字，逐条一一对应。已核对原文：
+
+| 论文位置 | 数字 | 本次是否复现 |
+|---|---|---|
+| Table 4 每行 "Time in ms / SA" 列 | 46 条 SAT-Accel 单条时间 | ✅ 逐条对比（本文档 §5） |
+| Table 3 每行 "Time in ms (SA)" 列 | 13 条 SAT-Accel 单条时间 | ✅ 逐条对比（本文档 §5） |
+| Table 4 汇总行 `SA Speedup Avg` | vs MiniSat **17.86x**、vs Kissat **2.77x** | ⬜ 只有本机重跑 MiniSat/Kissat 才能复现（Step 5） |
+| Table 3 汇总行 `SA Spdup Avg` | vs SAT-Hard **800** | ❌ 不复现，手上没有 SAT-Hard |
+
+**明确不做的对比**（避免得出无意义的结论）：
+
+- Table 4 的 `MiniSat` / `Kissat` 两列跑在 EPYC 7V13 @ 2.5 GHz 上，不是本机 CPU，
+  不与本机任何数字相比。
+- Table 4 的 co-processor 估算列（0.3 µs / 1 µs / 160 µs / MS Prop. Cnt）是论文的
+  **模型外推**，不是实测，不参与对比。
+- Table 2（资源占用）是 U55C 的综合结果，与 VCK5000 的布局布线无可比性；
+  URAM 数字只在 §1 里作为「为什么容量减半」的说明，不当作对比项。
+- Table 5（各阶段时间占比）只用于 §4 Step 4 的归因方向判断，不当作对比项。
+- 2026-07-15 那 8 个现代测例（§2）不在论文任何表格里，不参与对比。
+
+⚠️ Table 3 的第二列论文标的是 `Var`（变量数），Table 4 标的是 `Literals`。
+`paper_baseline.csv` 里两者都写进 `paper_lits` 字段，读的时候注意口径不同。
 
 ---
 
