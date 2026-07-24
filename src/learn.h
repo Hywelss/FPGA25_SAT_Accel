@@ -67,7 +67,7 @@ void saveClauseDataflow(hls::stream<lit>& litNewPage, ap_uint<512> litStore[_FPG
 void learnClause(clsState clsStates[_FPGA_CLS_STATES_PARTITION][_FPGA_MAX_CLAUSES/_FPGA_CLS_STATES_PARTITION],
     ap_uint<512> litStore[_FPGA_MAX_LITERAL_ELEMENTS/LIT_SLOTS_PER_WORD],
     literalMetaData lmd[_FPGA_MAX_LITERALS], literalMinimizeMetaData lmmd[_FPGA_PARALLEL_MINIMIZE][_FPGA_MAX_LITERALS],
-    lit insertPropagate[2], mmuStream<unsigned int, _MAX_PAGES_LIT_STORE_>& freeLitPageAddresses,
+    lit insertPropagate[2], mmuStream<unsigned int, _MAX_PAGES_LIT_STORE_TOTAL_>& freeLitPageAddresses,
     int& decisionLevel, int& givenClsID,
     const lit answerStack[_FPGA_MAX_LITERALS], const cls unitByCls[_FPGA_MAX_LITERALS], const lit literalCommit, unsigned int& answerStackHeight,
     const ap_uint<1> POSITIVE_LIT_PHASE_VAL, const bool resetAll,

@@ -64,7 +64,30 @@
 #define _FPGA_MAX_CLAUSE_ELEMENTS (256*4096)
 #define _HOST_MAX_CLAUSE_ELEMENTS _FPGA_MAX_CLAUSE_ELEMENTS
 #endif
-#define _HOST_MAX_LITERAL_ELEMENTS _FPGA_MAX_LITERAL_ELEMENTS
+
+// ---- Occurrence DDR-spill tier (OCC_DDR_TIER) ------------------------------
+// The occurrence (litStore) page allocator hands out URAM page addresses first
+// (element addr < _FPGA_MAX_LITERAL_ELEMENTS) and, once URAM is exhausted, DDR
+// overflow page addresses. A page whose address is >= _FPGA_MAX_LITERAL_ELEMENTS
+// lives in a device-DDR arena at offset (addr - _FPGA_MAX_LITERAL_ELEMENTS).
+// Instances whose occurrence lists fit in URAM never touch DDR (zero
+// regression); only the overflow spills. Define OCC_DDR_TIER to enable; with it
+// off _FPGA_OCC_TOTAL_ELEMENTS == _FPGA_MAX_LITERAL_ELEMENTS, i.e. baseline.
+//#define OCC_DDR_TIER
+#if defined(OCC_DDR_TIER)
+  #if defined(FPGA_VCK5000)
+    #define _FPGA_OCC_DDR_ELEMENTS (32768 * LIT_SLOTS_PER_WORD)
+  #else
+    #define _FPGA_OCC_DDR_ELEMENTS (65536 * LIT_SLOTS_PER_WORD)
+  #endif
+#else
+  #define _FPGA_OCC_DDR_ELEMENTS 0
+#endif
+#define _FPGA_OCC_TOTAL_ELEMENTS (_FPGA_MAX_LITERAL_ELEMENTS + _FPGA_OCC_DDR_ELEMENTS)
+
+// litStore URAM array size stays _FPGA_MAX_LITERAL_ELEMENTS; the allocator and
+// host image span the full URAM+DDR address space.
+#define _HOST_MAX_LITERAL_ELEMENTS _FPGA_OCC_TOTAL_ELEMENTS
 
 //FOR THE CONFIGURATION.JSON FILE:
 
@@ -89,7 +112,12 @@
 // _HOST_RESET_MULTIPLIER 100
 
 const int MAX_STREAM_DEPTH=(_FPGA_MAX_LITERALS/4);
+// URAM-resident occurrence pages.
 const unsigned int _MAX_PAGES_LIT_STORE_=_FPGA_MAX_LITERAL_ELEMENTS/LIT_SLOTS_PER_WORD;
+// URAM + DDR-overflow occurrence pages. The free-page allocator recycle buffer
+// and page address space span this; == _MAX_PAGES_LIT_STORE_ when OCC_DDR_TIER
+// is off.
+const unsigned int _MAX_PAGES_LIT_STORE_TOTAL_=_FPGA_OCC_TOTAL_ELEMENTS/LIT_SLOTS_PER_WORD;
 const unsigned int _MAX_PAGES_CLS_STORE_=_FPGA_MAX_CLAUSE_ELEMENTS/4;
 
 extern int spentRemoving;

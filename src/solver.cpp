@@ -171,7 +171,7 @@ void solver(clsStatePCIE* clsStates, ap_int<512>* litStore, lit* answerStack,
     literalMinimizeMetaData mlmmd[_FPGA_PARALLEL_MINIMIZE][_FPGA_MAX_LITERALS];
     #pragma HLS array_partition variable=mlmmd dim=1 complete
 
-    mmuStream<unsigned int, _MAX_PAGES_LIT_STORE_> freeLitPageAddresses(literalElements,_FPGA_MAX_LITERAL_ELEMENTS,LITERAL_PAGE_SIZE);
+    mmuStream<unsigned int, _MAX_PAGES_LIT_STORE_TOTAL_> freeLitPageAddresses(literalElements,_FPGA_OCC_TOTAL_ELEMENTS,LITERAL_PAGE_SIZE);
     #pragma HLS bind_storage variable=freeLitPageAddresses.array type=RAM_S2P impl=URAM
 
     lit literalCommit;
@@ -231,7 +231,7 @@ void solver(clsStatePCIE* clsStates, ap_int<512>* litStore, lit* answerStack,
     // pressure resets, status checks, minimum free clause elements,
     // minimum free clause IDs, minimum free literal pages
     ap_uint<64> scalabilityStats[5] = {
-        0, 0, _FPGA_MAX_CLAUSE_ELEMENTS, _FPGA_MAX_CLAUSES, _MAX_PAGES_LIT_STORE_
+        0, 0, _FPGA_MAX_CLAUSE_ELEMENTS, _FPGA_MAX_CLAUSES, _MAX_PAGES_LIT_STORE_TOTAL_
     };
     #pragma HLS array_partition variable=scalabilityStats dim=0 complete
 
