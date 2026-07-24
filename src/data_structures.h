@@ -3,6 +3,7 @@
 
 #include "ap_int.h"
 #include "fpga_solver.h"
+#include "lit_store_format.h"
 
 typedef int lit;
 typedef int cls;

@@ -481,16 +481,16 @@ void saveClause(hls::stream<ap_int<96>>& toSaveClauseStream, ap_uint<512> litSto
         unsigned int reqAddrLit = get.range(31,0);
         unsigned int reqAddrOffset = LITERAL_PAGE_SIZE - get.range(63,32) - 2;
 
-        ap_int<512> fetchLine = litStore[reqAddrLit + reqAddrOffset/16];
+        ap_int<512> fetchLine = litStore[reqAddrLit + reqAddrOffset/LIT_SLOTS_PER_WORD];
 
-        if(reqAddrOffset%16 == 0 && get.range(63,32) > 14){
+        if(reqAddrOffset%LIT_SLOTS_PER_WORD == 0 && get.range(63,32) > LIT_PAGE_USABLE){
             fetchLine = 0;
-        }else if(reqAddrOffset%16 == 0 && get.range(63,32) <= 14){
-            fetchLine.range(447,0) = 0;
+        }else if(reqAddrOffset%LIT_SLOTS_PER_WORD == 0 && get.range(63,32) <= LIT_PAGE_USABLE){
+            fetchLine.range(LIT_USABLE_HI,0) = 0;
         }
-        fetchLine.range(32*(reqAddrOffset%16)+31,32*(reqAddrOffset%16)) = saveCls;
+        LIT_SLOT(fetchLine, reqAddrOffset%LIT_SLOTS_PER_WORD) = saveCls;
 
-        litStore[reqAddrLit + reqAddrOffset/16] = fetchLine;
+        litStore[reqAddrLit + reqAddrOffset/LIT_SLOTS_PER_WORD] = fetchLine;
     }
 }
 
