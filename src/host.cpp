@@ -18,6 +18,21 @@
 #include "fpga_solver.h"
 #include "xcl2.hpp"
 
+// The host litStore occurrence image uses the exact page layout the kernels use
+// (see lit_store_format.h): LIT_SLOT_BITS-wide slots, LIT_SLOTS_PER_WORD per
+// 512-bit page word, top two slots are the link pointers. pd.litStore is the
+// zero-initialized DMA byte buffer aliased as 512-bit words. With LIT_STORE_PACK
+// off these helpers are byte-identical to the old flat 32-bit int access
+// (element e -> word e/16, 32-bit lane e%16), so they are a no-op refactor then.
+static inline void setLitStoreSlot(lit* buf, unsigned int elem, unsigned int val){
+    ap_uint<512>* words = reinterpret_cast<ap_uint<512>*>(buf);
+    LIT_SLOT(words[elem/LIT_SLOTS_PER_WORD], elem%LIT_SLOTS_PER_WORD) = val;
+}
+static inline unsigned int getLitStoreSlot(const lit* buf, unsigned int elem){
+    const ap_uint<512>* words = reinterpret_cast<const ap_uint<512>*>(buf);
+    return (unsigned int)LIT_SLOT(words[elem/LIT_SLOTS_PER_WORD], elem%LIT_SLOTS_PER_WORD);
+}
+
 std::string comma(uint64_t n) {
     std::string result = std::to_string(n);
     for(int i = result.size() - 3; i > 0; i -= 3){
@@ -281,15 +296,15 @@ void parseDIMACS(std::string filePath, problemData& pd, const rapidjson::Documen
 
             for(unsigned int j = 0; j < litStore[a][i].size(); j++){
                 ensureLiteralCapacity(index1D, 1, i+1);
-                pd.litStore[index1D] = abs(litStore[a][i][j]);
+                setLitStoreSlot(pd.litStore, index1D, abs(litStore[a][i][j]));
                 index1D++;
                 index++;
 
-                if(index == configuration["_HOST_LITERAL_PAGE_SIZE"].GetUint()-2){
+                if(index == LIT_SLOTS_PER_WORD-2){
                     ensureLiteralCapacity(index1D, 2, i+1);
-                    pd.litStore[index1D] = 0;
+                    setLitStoreSlot(pd.litStore, index1D, 0);
                     index1D++;
-                    pd.litStore[index1D] = index1D + 1;
+                    setLitStoreSlot(pd.litStore, index1D, index1D + 1);
                     index1D++;
                     LMD_LATEST_PAGE(pd.lmd[i].compactlmd, a) = index1D;
 
@@ -297,13 +312,13 @@ void parseDIMACS(std::string filePath, problemData& pd, const rapidjson::Documen
                 }
             }
 
-            for(unsigned int j = 0; j < configuration["_HOST_LITERAL_PAGE_SIZE"].GetUint()-index; j++){
+            for(unsigned int j = 0; j < LIT_SLOTS_PER_WORD-index; j++){
                 ensureLiteralCapacity(index1D, 1, i+1);
-                pd.litStore[index1D] = 0;
+                setLitStoreSlot(pd.litStore, index1D, 0);
                 index1D++;
             }
             
-            LMD_FREE_SPACE(pd.lmd[i].compactlmd,a) = configuration["_HOST_LITERAL_PAGE_SIZE"].GetUint()-index-2;
+            LMD_FREE_SPACE(pd.lmd[i].compactlmd,a) = LIT_SLOTS_PER_WORD-index-2;
         }
     }
 
@@ -320,7 +335,7 @@ void parseDIMACS(std::string filePath, problemData& pd, const rapidjson::Documen
     pd.md.miscCounters[3] = decisionStore.size();
     pd.md.miscCounters[4] = configuration["_HOST_POSITIVE_LIT_PHASE_VAL"].GetBool();
     pd.md.miscCounters[5] = _HOST_MAX_LITERAL_ELEMENTS;
-    pd.md.miscCounters[6] = configuration["_HOST_LITERAL_PAGE_SIZE"].GetUint();
+    pd.md.miscCounters[6] = LIT_SLOTS_PER_WORD;
     pd.md.miscCounters[7] = configuration["_HOST_RESET_MULTIPLIER"].GetUint();
 
 
@@ -775,11 +790,11 @@ bool solve(std::string xclBinFile, std::string inputFilePath, std::string output
 
             unsigned index = 0;
             while(true){
-                if(index == configuration["_HOST_LITERAL_PAGE_SIZE"].GetUint()-2){
-                    addr = pd.litStore[addr+index+1];
+                if(index == LIT_SLOTS_PER_WORD-2){
+                    addr = getLitStoreSlot(pd.litStore, addr+index+1);
                     index = 0;
                 }
-                cls get = pd.litStore[addr+index];
+                cls get = getLitStoreSlot(pd.litStore, addr+index);
                 index++;
                 if(get == 0){
                     break;

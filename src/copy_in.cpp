@@ -42,8 +42,8 @@ void copy_answerStack(lit mAnswerStack[_FPGA_MAX_LITERALS], lit* answerStack, co
 void copy_litStore(ap_uint<512> mLitStore[_FPGA_MAX_LITERAL_ELEMENTS/LIT_SLOTS_PER_WORD], ap_int<512>* litStore, const unsigned int literalElements){
     #pragma HLS inline off
 
-    unsigned int literalElements16 = literalElements/16;
-    if(literalElements%16 != 0){
+    unsigned int literalElements16 = literalElements/LIT_SLOTS_PER_WORD;
+    if(literalElements%LIT_SLOTS_PER_WORD != 0){
         literalElements16++;
     }
     COPY_LIT_STORE: for(unsigned int i = 0; i < literalElements16; i++){

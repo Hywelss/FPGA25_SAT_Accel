@@ -52,6 +52,15 @@
 
 #include "ap_int.h"
 
+// ---- Packing toggle --------------------------------------------------------
+// Define LIT_STORE_PACK to build the 21-bit / 24-slot packed occurrence layout
+// (+50% occurrence entries per 512-bit page => same litStore URAM, higher
+// capacity). Comment it out to build the legacy 32-bit / 16-slot layout, which
+// is bit-identical to the pre-A1 solver. Every host and kernel translation unit
+// includes this header, so the choice is applied uniformly across the design.
+#define LIT_STORE_PACK
+// ----------------------------------------------------------------------------
+
 #if defined(LIT_STORE_PACK)
     #define LIT_SLOT_BITS       21
     #define LIT_SLOTS_PER_WORD   24

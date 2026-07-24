@@ -45,18 +45,22 @@
 #define _FPGA_GC_HEADROOM_MULTIPLIER 2
 
 //REQUIRES FPGA BITSTREAM RECOMPILE
-//MUST BE MULTIPLE OF 16
+// litStore capacity is expressed as (word_count * LIT_SLOTS_PER_WORD) so the
+// number of 512-bit litStore words (=> URAM footprint) stays fixed while
+// LIT_STORE_PACK raises the occupancy per word. Unpacked (16 slots) reproduces
+// the legacy 524288/1048576 values exactly; packed (24 slots) gives +50%
+// occurrence capacity in the same litStore URAM.
 #if defined(FPGA_VCK5000)
 // VCK5000 has 463 URAMs versus the 960 URAMs on the original U55C target.
 // Halving the literal/clauses store capacity keeps the complete design within
 // the VCK5000 URAM budget while preserving the solver architecture.
-#define _FPGA_MAX_LITERAL_ELEMENTS (128*4096)
+#define _FPGA_MAX_LITERAL_ELEMENTS (32768 * LIT_SLOTS_PER_WORD)
 // This is the learned/hot-clause URAM tier. Original clauses remain in DDR and
 // use the larger host/device capacity below.
 #define _FPGA_MAX_CLAUSE_ELEMENTS (128*4096)
 #define _HOST_MAX_CLAUSE_ELEMENTS (1024*4096)
 #else
-#define _FPGA_MAX_LITERAL_ELEMENTS (256*4096)
+#define _FPGA_MAX_LITERAL_ELEMENTS (65536 * LIT_SLOTS_PER_WORD)
 #define _FPGA_MAX_CLAUSE_ELEMENTS (256*4096)
 #define _HOST_MAX_CLAUSE_ELEMENTS _FPGA_MAX_CLAUSE_ELEMENTS
 #endif
