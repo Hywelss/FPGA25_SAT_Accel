@@ -39,7 +39,7 @@ void copy_answerStack(lit mAnswerStack[_FPGA_MAX_LITERALS], lit* answerStack, co
     }
 }
 
-void copy_litStore(ap_uint<512> mLitStore[_FPGA_MAX_LITERAL_ELEMENTS/16], ap_int<512>* litStore, const unsigned int literalElements){
+void copy_litStore(ap_uint<512> mLitStore[_FPGA_MAX_LITERAL_ELEMENTS/LIT_SLOTS_PER_WORD], ap_int<512>* litStore, const unsigned int literalElements){
     #pragma HLS inline off
 
     unsigned int literalElements16 = literalElements/16;
@@ -53,7 +53,7 @@ void copy_litStore(ap_uint<512> mLitStore[_FPGA_MAX_LITERAL_ELEMENTS/16], ap_int
 }
 
 void copy_in_dataflow_wrapper(clsState mClsStates[_FPGA_CLS_STATES_PARTITION][_FPGA_MAX_CLAUSES/_FPGA_CLS_STATES_PARTITION], 
-    ap_uint<512> mLitStore[_FPGA_MAX_LITERAL_ELEMENTS/16],
+    ap_uint<512> mLitStore[_FPGA_MAX_LITERAL_ELEMENTS/LIT_SLOTS_PER_WORD],
     literalMetaData mlmd[_FPGA_MAX_LITERALS], literalMinimizeMetaData mlmmd[_FPGA_PARALLEL_MINIMIZE][_FPGA_MAX_LITERALS], 
     lit mAnswerStack[_FPGA_MAX_LITERALS], 
     clsStatePCIE* clsStates, ap_int<512>* litStore1, literalMetaDataPCIE* lmd, 

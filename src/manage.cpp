@@ -2,7 +2,7 @@
 
 void allocatePage(hls::stream<lit>& litNewPage, mmuStream<unsigned int, _MAX_PAGES_LIT_STORE_>& freeLitPageAddresses,
     literalMetaData lmd[_FPGA_MAX_LITERALS], 
-    ap_uint<512> litStore[_FPGA_MAX_LITERAL_ELEMENTS/16], int& error,
+    ap_uint<512> litStore[_FPGA_MAX_LITERAL_ELEMENTS/LIT_SLOTS_PER_WORD], int& error,
     const unsigned int LITERAL_PAGE_SIZE){
     #pragma HLS inline off
     ALLOCATE_PAGE: while(true){
@@ -26,25 +26,25 @@ void allocatePage(hls::stream<lit>& litNewPage, mmuStream<unsigned int, _MAX_PAG
 
         literalMetaData getLmd = lmd[abs(getLit)-1];
 
-        unsigned int reqAddrLit = LMD_LATEST_PAGE(getLmd.compactlmd,select)/16;
+        unsigned int reqAddrLit = LMD_LATEST_PAGE(getLmd.compactlmd,select)/LIT_SLOTS_PER_WORD;
 
-        ap_uint<512> fetchLine = litStore[reqAddrLit + LITERAL_PAGE_SIZE/16 - 1];
-        fetchLine.range(511,480) = freePageAddress;
-        litStore[reqAddrLit + LITERAL_PAGE_SIZE/16 - 1] = fetchLine;
+        ap_uint<512> fetchLine = litStore[reqAddrLit + LITERAL_PAGE_SIZE/LIT_SLOTS_PER_WORD - 1];
+        LIT_NEXT_PTR(fetchLine) = freePageAddress;
+        litStore[reqAddrLit + LITERAL_PAGE_SIZE/LIT_SLOTS_PER_WORD - 1] = fetchLine;
 
         LMD_LATEST_PAGE(getLmd.compactlmd,select) = freePageAddress;
         LMD_FREE_SPACE(getLmd.compactlmd,select) = LITERAL_PAGE_SIZE-2;
 
         ap_uint<512> clearLastSubPage = 0;
-        clearLastSubPage.range(479,448) = reqAddrLit*16;
-        litStore[freePageAddress/16 + LITERAL_PAGE_SIZE/16 - 1] = clearLastSubPage;
+        LIT_BACK_PTR(clearLastSubPage) = reqAddrLit*LIT_SLOTS_PER_WORD;
+        litStore[freePageAddress/LIT_SLOTS_PER_WORD + LITERAL_PAGE_SIZE/LIT_SLOTS_PER_WORD - 1] = clearLastSubPage;
 
         lmd[abs(getLit)-1] = getLmd;
     }
 }
 
 
-void deleteTransposedClauses(ap_uint<512> litStore[_FPGA_MAX_LITERAL_ELEMENTS/16],
+void deleteTransposedClauses(ap_uint<512> litStore[_FPGA_MAX_LITERAL_ELEMENTS/LIT_SLOTS_PER_WORD],
     literalMetaData lmd[_FPGA_MAX_LITERALS],
     mmuStream<unsigned int,_MAX_PAGES_LIT_STORE_>& freeLitPageAddresses, const unsigned int LITERAL_PAGE_SIZE, 
     hls::stream<ap_axiu<96,0,0,0>>& clauseStoreInputStream1, hls::stream<ap_axiu<32,0,0,0>>& clauseStoreOutputStream1, hls::stream<ap_axiu<32,0,0,0>>& locationOutputStream){
@@ -80,11 +80,11 @@ void deleteTransposedClauses(ap_uint<512> litStore[_FPGA_MAX_LITERAL_ELEMENTS/16
             }
 
             unsigned int numElements = LMD_NUM_ELE(getLmd.compactlmd,selectSide);
-            unsigned int latestPage = LMD_LATEST_PAGE(getLmd.compactlmd,selectSide)/16;
+            unsigned int latestPage = LMD_LATEST_PAGE(getLmd.compactlmd,selectSide)/LIT_SLOTS_PER_WORD;
             unsigned int freeSpace = LMD_FREE_SPACE(getLmd.compactlmd,selectSide);
             unsigned int reqAddrOffsetMove = LITERAL_PAGE_SIZE - freeSpace - 2 - 1;
 
-            ap_uint<512> replaceFetch = litStore[address/16];
+            ap_uint<512> replaceFetch = litStore[address/LIT_SLOTS_PER_WORD];
             ap_uint<512> moveFetch;
 
             unsigned int previousLatestPage = latestPage;
@@ -92,35 +92,35 @@ void deleteTransposedClauses(ap_uint<512> litStore[_FPGA_MAX_LITERAL_ELEMENTS/16
             bool specialCase = false;
             unsigned int previousPage = 0;
             if(freeSpace == LITERAL_PAGE_SIZE-2){
-                freeLitPageAddresses.write(latestPage*16);
+                freeLitPageAddresses.write(latestPage*LIT_SLOTS_PER_WORD);
 
-                moveFetch = litStore[latestPage+LITERAL_PAGE_SIZE/16-1];
-                LMD_LATEST_PAGE(getLmd.compactlmd,selectSide) = moveFetch.range(479,448);
+                moveFetch = litStore[latestPage+LITERAL_PAGE_SIZE/LIT_SLOTS_PER_WORD-1];
+                LMD_LATEST_PAGE(getLmd.compactlmd,selectSide) = LIT_BACK_PTR(moveFetch);
                 LMD_FREE_SPACE(getLmd.compactlmd,selectSide) = 1;
                 reqAddrOffsetMove = LITERAL_PAGE_SIZE - 2 - 1;
-                latestPage = moveFetch.range(479,448)/16;
+                latestPage = LIT_BACK_PTR(moveFetch)/LIT_SLOTS_PER_WORD;
             }else{
                 LMD_FREE_SPACE(getLmd.compactlmd,selectSide) = freeSpace + 1;
             }
 
             cls movedCls;
             unsigned int replaceAddr = address;
-            unsigned int swapAddr = latestPage*16 + reqAddrOffsetMove;
-            if(address/16 == latestPage + reqAddrOffsetMove/16){ 
-                movedCls = replaceFetch.range(32*(reqAddrOffsetMove%16)+31,32*(reqAddrOffsetMove%16));
-                replaceFetch.range(32*(address%16)+31,32*(address%16)) = movedCls;
-                replaceFetch.range(32*(reqAddrOffsetMove%16)+31,32*(reqAddrOffsetMove%16)) = 0;
+            unsigned int swapAddr = latestPage*LIT_SLOTS_PER_WORD + reqAddrOffsetMove;
+            if(address/LIT_SLOTS_PER_WORD == latestPage + reqAddrOffsetMove/LIT_SLOTS_PER_WORD){
+                movedCls = LIT_SLOT(replaceFetch, reqAddrOffsetMove%LIT_SLOTS_PER_WORD);
+                LIT_SLOT(replaceFetch, address%LIT_SLOTS_PER_WORD) = movedCls;
+                LIT_SLOT(replaceFetch, reqAddrOffsetMove%LIT_SLOTS_PER_WORD) = 0;
 
-                litStore[address/16] = replaceFetch;
+                litStore[address/LIT_SLOTS_PER_WORD] = replaceFetch;
             }else{
-                moveFetch = litStore[latestPage + reqAddrOffsetMove/16];
-                movedCls = moveFetch.range(32*(reqAddrOffsetMove%16)+31,32*(reqAddrOffsetMove%16));
+                moveFetch = litStore[latestPage + reqAddrOffsetMove/LIT_SLOTS_PER_WORD];
+                movedCls = LIT_SLOT(moveFetch, reqAddrOffsetMove%LIT_SLOTS_PER_WORD);
 
-                replaceFetch.range(32*(address%16)+31,32*(address%16)) = movedCls;
-                moveFetch.range(32*(reqAddrOffsetMove%16)+31,32*(reqAddrOffsetMove%16)) = 0;
+                LIT_SLOT(replaceFetch, address%LIT_SLOTS_PER_WORD) = movedCls;
+                LIT_SLOT(moveFetch, reqAddrOffsetMove%LIT_SLOTS_PER_WORD) = 0;
 
-                litStore[address/16] = replaceFetch;
-                litStore[latestPage + reqAddrOffsetMove/16] = moveFetch;
+                litStore[address/LIT_SLOTS_PER_WORD] = replaceFetch;
+                litStore[latestPage + reqAddrOffsetMove/LIT_SLOTS_PER_WORD] = moveFetch;
             }
 
             ap_axiu<96,0,0,0> sendData;

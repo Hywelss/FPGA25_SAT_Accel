@@ -158,7 +158,7 @@ void solver(clsStatePCIE* clsStates, ap_int<512>* litStore, lit* answerStack,
     lit mAnswerStack[_FPGA_MAX_LITERALS];
     #pragma HLS bind_storage variable=mAnswerStack type=RAM_S2P impl=BRAM latency=1
 
-    ap_uint<512> mLitStore[_FPGA_MAX_LITERAL_ELEMENTS/16];
+    ap_uint<512> mLitStore[_FPGA_MAX_LITERAL_ELEMENTS/LIT_SLOTS_PER_WORD];
     #pragma HLS bind_storage variable=mLitStore type=RAM_S2P impl=URAM latency=1
 
     literalMetaData mlmd[_FPGA_MAX_LITERALS];

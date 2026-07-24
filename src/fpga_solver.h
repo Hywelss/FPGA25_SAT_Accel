@@ -12,6 +12,10 @@
 #include <utils/x_hls_utils.h>
 #include <ap_axi_sdata.h>
 
+// litStore occurrence-page layout (LIT_SLOTS_PER_WORD etc). Included here,
+// before _MAX_PAGES_LIT_STORE_ below, so the page-count derivation can use it.
+#include "lit_store_format.h"
+
 
 //REQUIRES FPGA BITSTREAM RECOMPILE
 #define _FPGA_MAX_LITERALS (8192*4)
@@ -81,7 +85,7 @@
 // _HOST_RESET_MULTIPLIER 100
 
 const int MAX_STREAM_DEPTH=(_FPGA_MAX_LITERALS/4);
-const unsigned int _MAX_PAGES_LIT_STORE_=_FPGA_MAX_LITERAL_ELEMENTS/16;
+const unsigned int _MAX_PAGES_LIT_STORE_=_FPGA_MAX_LITERAL_ELEMENTS/LIT_SLOTS_PER_WORD;
 const unsigned int _MAX_PAGES_CLS_STORE_=_FPGA_MAX_CLAUSE_ELEMENTS/4;
 
 extern int spentRemoving;

@@ -221,7 +221,7 @@ void undo_states_and_minimize_task_parallel_wrapper(hls::stream<ap_axiu<32,0,0,0
     ap_uint<512> validBitMinimize[_FPGA_PARALLEL_MINIMIZE][_FPGA_MAX_LITERALS/512],
     ap_uint<2> mergeScratchPadMinimize[_FPGA_PARALLEL_MINIMIZE][_FPGA_MAX_LITERALS],
     unsigned int nonRemovableCount[_FPGA_PARALLEL_MINIMIZE], bool didSimplify[_FPGA_PARALLEL_MINIMIZE], const cls unitByCls[_FPGA_MAX_LITERALS],
-    const ap_uint<512> litStore[_FPGA_MAX_LITERAL_ELEMENTS/16],
+    const ap_uint<512> litStore[_FPGA_MAX_LITERAL_ELEMENTS/LIT_SLOTS_PER_WORD],
     const lit answerStack[_FPGA_MAX_LITERALS],  
     const lit literalCommit, const unsigned int backtrackHeight, unsigned int& answerStackHeight, 
     const bool foundAbsolute, const unsigned int LITERAL_PAGE_SIZE, const ap_uint<1> POSITIVE_LIT_PHASE_VAL, const unsigned int clearIterations,
@@ -421,7 +421,7 @@ void writeClauseStream(hls::stream<ap_int<96>>& toSaveClauseStream, hls::stream<
                 uniqueueDecisionLevelCount++;
             }
 
-            unsigned int reqAddrLit = LMD_LATEST_PAGE(newlmd.compactlmd,selectSide)/16;
+            unsigned int reqAddrLit = LMD_LATEST_PAGE(newlmd.compactlmd,selectSide)/LIT_SLOTS_PER_WORD;
             unsigned int reqAddrOffset = LMD_FREE_SPACE(newlmd.compactlmd,selectSide);
             cls saveCls = givenClsID+1;
 
@@ -463,7 +463,7 @@ void writeClauseStream(hls::stream<ap_int<96>>& toSaveClauseStream, hls::stream<
     toSaveClauseStream.write(-1);
 }
 
-void saveClause(hls::stream<ap_int<96>>& toSaveClauseStream, ap_uint<512> litStore[_FPGA_MAX_LITERAL_ELEMENTS/16], const unsigned int LITERAL_PAGE_SIZE){
+void saveClause(hls::stream<ap_int<96>>& toSaveClauseStream, ap_uint<512> litStore[_FPGA_MAX_LITERAL_ELEMENTS/LIT_SLOTS_PER_WORD], const unsigned int LITERAL_PAGE_SIZE){
     #pragma HLS inline off
 
     INSERT_NEW_CLAUSE: while(true){
@@ -494,7 +494,7 @@ void saveClause(hls::stream<ap_int<96>>& toSaveClauseStream, ap_uint<512> litSto
     }
 }
 
-void saveClauseDataflow(hls::stream<lit>& litNewPage, ap_uint<512> litStore[_FPGA_MAX_LITERAL_ELEMENTS/16],
+void saveClauseDataflow(hls::stream<lit>& litNewPage, ap_uint<512> litStore[_FPGA_MAX_LITERAL_ELEMENTS/LIT_SLOTS_PER_WORD],
     literalMetaData lmd[_FPGA_MAX_LITERALS], literalMinimizeMetaData lmmd[_FPGA_PARALLEL_MINIMIZE][_FPGA_MAX_LITERALS],
     clsState& newClauseState,
     const lit resolutionClause[_FPGA_MAX_LEARN_ELE],
@@ -516,7 +516,7 @@ void saveClauseDataflow(hls::stream<lit>& litNewPage, ap_uint<512> litStore[_FPG
 
 int overhead = 0;
 void learnClause(clsState clsStates[_FPGA_CLS_STATES_PARTITION][_FPGA_MAX_CLAUSES/_FPGA_CLS_STATES_PARTITION],
-    ap_uint<512> litStore[_FPGA_MAX_LITERAL_ELEMENTS/16],
+    ap_uint<512> litStore[_FPGA_MAX_LITERAL_ELEMENTS/LIT_SLOTS_PER_WORD],
     literalMetaData lmd[_FPGA_MAX_LITERALS], literalMinimizeMetaData lmmd[_FPGA_PARALLEL_MINIMIZE][_FPGA_MAX_LITERALS],
     lit insertPropagate[2], mmuStream<unsigned int, _MAX_PAGES_LIT_STORE_>& freeLitPageAddresses,
     int& decisionLevel, int& givenClsID,

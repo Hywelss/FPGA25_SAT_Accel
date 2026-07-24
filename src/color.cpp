@@ -4,7 +4,7 @@ int splitResidualCnt = 0;
 unsigned int checkCnt = 0;
 void colorStream(hls::stream<colorValue>* toStateUpdater, 
     hls::stream<colorAssignment>& toColorStream, hls::stream<bool>* stopSending,
-    const ap_uint<512> litStore[_FPGA_MAX_LITERAL_ELEMENTS/16], const unsigned int LITERAL_PAGE_SIZE,
+    const ap_uint<512> litStore[_FPGA_MAX_LITERAL_ELEMENTS/LIT_SLOTS_PER_WORD], const unsigned int LITERAL_PAGE_SIZE,
     lit* literalCommit, const unsigned int type, ap_uint<64>* litStoreAccessStats){
     #pragma HLS inline off
 
@@ -41,7 +41,7 @@ void colorStream(hls::stream<colorValue>* toStateUpdater,
             }
         }
 
-        val = litStore[address/16];
+        val = litStore[address/LIT_SLOTS_PER_WORD];
 
         if(state == 0){
             if(readOne.eos || stopSendingRead){
@@ -66,7 +66,18 @@ void colorStream(hls::stream<colorValue>* toStateUpdater,
             }
         }else if(state == 1){
             colorValue put;
-            put.clsID = val.range(32*(pageWalkIndex%16)+32*READ_CHUNK_SIZE-1,32*(pageWalkIndex%16));
+#if defined(LIT_STORE_PACK)
+            // Packed slots are LIT_SLOT_BITS wide; zero-extend each of the
+            // READ_CHUNK_SIZE occurrence entries back to a 32-bit lane so the
+            // downstream colorValue.clsID / updateStatesForward stay 32-bit.
+            for(unsigned int q = 0; q < READ_CHUNK_SIZE; q++){
+                #pragma HLS unroll
+                put.clsID.range(32*q+31,32*q) =
+                    (ap_uint<32>)LIT_SLOT(val, (pageWalkIndex%LIT_SLOTS_PER_WORD)+q);
+            }
+#else
+            put.clsID = val.range(32*(pageWalkIndex%LIT_SLOTS_PER_WORD)+32*READ_CHUNK_SIZE-1,32*(pageWalkIndex%LIT_SLOTS_PER_WORD));
+#endif
             put.litID = readOne.literal;
             put.depthCount = readOne.depthCount;
 
@@ -77,8 +88,8 @@ void colorStream(hls::stream<colorValue>* toStateUpdater,
             address += READ_CHUNK_SIZE;
             pageWalkIndex += READ_CHUNK_SIZE;
             numElementsRead += READ_CHUNK_SIZE;
-            if(pageWalkIndex + (16-READ_CHUNK_SIZE) == LITERAL_PAGE_SIZE){
-                tmpAddr = reg((unsigned int)val.range(511,480));
+            if(pageWalkIndex == LITERAL_PAGE_SIZE - READ_CHUNK_SIZE){
+                tmpAddr = reg((unsigned int)LIT_NEXT_PTR(val));
             }else if(pageWalkIndex == LITERAL_PAGE_SIZE){
                 pageWalkIndex = 0;
                 put.clsID.range(32*READ_CHUNK_SIZE-1,32*(READ_CHUNK_SIZE-2)) = 0;
