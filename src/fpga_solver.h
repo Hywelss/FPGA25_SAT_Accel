@@ -120,6 +120,21 @@ const unsigned int _MAX_PAGES_LIT_STORE_=_FPGA_MAX_LITERAL_ELEMENTS/LIT_SLOTS_PE
 const unsigned int _MAX_PAGES_LIT_STORE_TOTAL_=_FPGA_OCC_TOTAL_ELEMENTS/LIT_SLOTS_PER_WORD;
 const unsigned int _MAX_PAGES_CLS_STORE_=_FPGA_MAX_CLAUSE_ELEMENTS/4;
 
+// Occurrence page access routed by 512-bit word index: URAM below the
+// _MAX_PAGES_LIT_STORE_ threshold, DDR overflow arena (the reused litStore input
+// buffer, same global word index) at/above it. With OCC_DDR_TIER off the
+// threshold equals the total word count, so the DDR branch is statically
+// unreachable and HLS drops it (and the unused ddr interface) => baseline.
+static inline ap_uint<512> occReadWord(const ap_uint<512>* uram, const ap_int<512>* ddr, unsigned int w){
+    #pragma HLS inline
+    return (w < _MAX_PAGES_LIT_STORE_) ? uram[w] : (ap_uint<512>)ddr[w];
+}
+static inline void occWriteWord(ap_uint<512>* uram, ap_int<512>* ddr, unsigned int w, ap_uint<512> v){
+    #pragma HLS inline
+    if(w < _MAX_PAGES_LIT_STORE_) uram[w] = v;
+    else ddr[w] = (ap_int<512>)v;
+}
+
 extern int spentRemoving;
 extern int overhead;
 extern int splitResidualCnt;
