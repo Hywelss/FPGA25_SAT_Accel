@@ -52,14 +52,9 @@
 // occurrence capacity in the same litStore URAM.
 #if defined(FPGA_VCK5000)
 // VCK5000 has 463 URAMs versus the 960 URAMs on the original U55C target.
-// A3 capacity lift: the DDR clause-body tier left ~49 free URAMs (baseline
-// routed at 414/463). Growing the litStore word count from 32768 to 36864
-// (=> 589824 occurrence elements, +12.5%) spends ~+16 URAM total (litStore /16
-// and the location_handler position map /4 grow ~+8 each), landing near
-// 430/463 (~93%) with routing headroom. Unlike A1 packing this keeps 32-bit
-// aligned slots and shift/mask addressing, so timing stays at the baseline.
-// Once a hardware build confirms fit + timing, this can be pushed toward ~40960.
-#define _FPGA_MAX_LITERAL_ELEMENTS (36864 * LIT_SLOTS_PER_WORD)
+// Halving the literal/clauses store capacity keeps the complete design within
+// the VCK5000 URAM budget while preserving the solver architecture.
+#define _FPGA_MAX_LITERAL_ELEMENTS (32768 * LIT_SLOTS_PER_WORD)
 // This is the learned/hot-clause URAM tier. Original clauses remain in DDR and
 // use the larger host/device capacity below.
 #define _FPGA_MAX_CLAUSE_ELEMENTS (128*4096)
