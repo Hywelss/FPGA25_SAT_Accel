@@ -58,7 +58,16 @@
 // capacity). Comment it out to build the legacy 32-bit / 16-slot layout, which
 // is bit-identical to the pre-A1 solver. Every host and kernel translation unit
 // includes this header, so the choice is applied uniformly across the design.
-#define LIT_STORE_PACK
+//
+// NOTE: A1 packing is functionally correct (all 20 sw_emu cases pass) but the
+// 24-slot / 21-bit geometry is timing-infeasible on VCK5000: the non-power-of-2
+// /24,%24 address math and unaligned 21-bit barrel-shift slicing pushed the
+// routed critical path to WNS -29ns (baseline was -0.16ns). It is left OFF; the
+// capacity gain is instead taken by A3 (raise the unpacked _FPGA_MAX_LITERAL_
+// ELEMENTS into free URAM, see fpga_solver.h), which keeps the cheap
+// shift/mask addressing and baseline timing. Re-enable only with a
+// timing-oriented redesign of the packed accessors.
+// #define LIT_STORE_PACK
 // ----------------------------------------------------------------------------
 
 #if defined(LIT_STORE_PACK)
