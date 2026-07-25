@@ -8,7 +8,8 @@ void allocatePage(hls::stream<lit>& litNewPage, mmuStream<unsigned int, _MAX_PAG
     ALLOCATE_PAGE: while(true){
         #pragma HLS loop_tripcount min=32 max=32
         #pragma HLS dependence variable=lmd inter false
-        #pragma HLS dependence variable=litStore inter false
+        // litStore is a direct-mapped cache; different pages can alias onto the
+        // same line, so iterations are not independent.
 
         if(litNewPage.empty()){
             break;
@@ -67,7 +68,7 @@ void deleteTransposedClauses(ap_uint<512> litStore[_FPGA_MAX_LITERAL_ELEMENTS/LI
         REMOVE_FROM_LITSTORE_2: for(unsigned int i = 0; i < numElementsCls; i++){
             #pragma HLS loop_tripcount min=32 max=32
             #pragma HLS dependence variable=lmd inter false
-            #pragma HLS dependence variable=litStore inter false
+            // litStore is a direct-mapped cache; see allocatePage above.
 
             ap_axiu<32,0,0,0> getData = clauseStoreOutputStream1.read();
             ap_axiu<32,0,0,0> getAddr = locationOutputStream.read();

@@ -54,8 +54,12 @@ void colorStream(hls::stream<colorValue>* toStateUpdater,
     COLOR_STREAM: while(true){
         #pragma HLS loop_tripcount min=1024 max=1024
         #pragma HLS pipeline II=1
-        #pragma HLS dependence variable=litStore inter false
-        #pragma HLS dependence variable=occCacheTag inter false
+        // No inter-iteration dependence override here. The array is a
+        // direct-mapped cache, so occLine() aliases many words onto one line and
+        // consecutive iterations working on different pages can legitimately
+        // collide; asserting independence would let a later iteration read a tag
+        // the previous one has not written yet and hit on the wrong page. The
+        // register bypass below only covers repeats of the same word.
 
         if(type == 0){
             if(stopSending->read_nb(stopSendingRead)){

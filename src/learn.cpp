@@ -469,7 +469,9 @@ void saveClause(hls::stream<ap_int<96>>& toSaveClauseStream, ap_uint<512> litSto
     INSERT_NEW_CLAUSE: while(true){
         #pragma HLS loop_tripcount min=16 max=16
         #pragma HLS pipeline
-        #pragma HLS dependence variable=litStore inter false
+        // litStore is a direct-mapped cache now, not a directly indexed array:
+        // two iterations touching different pages can alias onto one line, so
+        // the previous independence assertion no longer holds.
 
         ap_int<96> get = toSaveClauseStream.read();
 
