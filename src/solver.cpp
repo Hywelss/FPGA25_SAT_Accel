@@ -125,13 +125,11 @@ void solver(clsStatePCIE* clsStates, ap_int<512>* litStore, lit* answerStack,
     hls::stream<ap_axiu<96,0,0,0>>& messageStream){
 
     #pragma HLS INTERFACE m_axi port=clsStates offset=slave bundle=gmem5 latency=40
-    // The occurrence table is DDR-authoritative and read on a cache miss inside
-    // the II=1 BCP walk. HLS reserves the declared latency for every iteration
-    // of that loop, so latency=40 statically inflated the schedule (II 1 -> 24)
-    // whether or not a miss actually occurred. Declaring a short latency makes
-    // it schedule optimistically and rely on the AXI handshake to stall only on
-    // a real miss.
-    #pragma HLS INTERFACE m_axi port=litStore offset=slave bundle=gmemLitStore1 latency=1 num_read_outstanding=16 num_write_outstanding=16
+    // Occurrence table: DDR-authoritative, reached only on a cache miss. The
+    // declared latency is what HLS reserves per iteration of the pipelined BCP
+    // walk, so it decides whether a miss costs the whole loop its initiation
+    // interval or only the iteration that misses.
+    #pragma HLS INTERFACE m_axi port=litStore offset=slave bundle=gmemLitStore1 latency=64 num_read_outstanding=16 num_write_outstanding=16
     #pragma HLS INTERFACE m_axi port=answerStack offset=slave bundle=gmem7 latency=40
     #pragma HLS INTERFACE m_axi port=lmd offset=slave bundle=gmem10 latency=40
     #pragma HLS INTERFACE m_axi port=miscCounters offset=slave bundle=gmem7 latency=40
