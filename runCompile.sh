@@ -66,6 +66,12 @@ case "$PLATFORM" in
 		;;
 esac
 
+# Extra preprocessor defines for both the host and the kernels, e.g.
+#   EXTRA_DEFINES=-DOCC_CACHE_STRESS ./runCompile.sh sw_emu
+# to shrink the occurrence cache so the regression cases exercise the tiered
+# (miss / evict / write-through / cross-tier walk) paths.
+PLATFORM_DEFINE="$PLATFORM_DEFINE ${EXTRA_DEFINES:-}"
+
 if [[ ! -f "$XRT_ROOT/setup.sh" || ! -f "$VITIS_ROOT/settings64.sh" ]]
 then
 	echo -e "${RD}XRT or Vitis setup script was not found.${NC}"

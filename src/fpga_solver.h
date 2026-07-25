@@ -54,36 +54,49 @@
 // VCK5000 has 463 URAMs versus the 960 URAMs on the original U55C target.
 // Halving the literal/clauses store capacity keeps the complete design within
 // the VCK5000 URAM budget while preserving the solver architecture.
-#define _FPGA_MAX_LITERAL_ELEMENTS (32768 * LIT_SLOTS_PER_WORD)
-// This is the learned/hot-clause URAM tier. Original clauses remain in DDR and
-// use the larger host/device capacity below.
 #define _FPGA_MAX_CLAUSE_ELEMENTS (128*4096)
 #define _HOST_MAX_CLAUSE_ELEMENTS (1024*4096)
 #else
-#define _FPGA_MAX_LITERAL_ELEMENTS (65536 * LIT_SLOTS_PER_WORD)
 #define _FPGA_MAX_CLAUSE_ELEMENTS (256*4096)
 #define _HOST_MAX_CLAUSE_ELEMENTS _FPGA_MAX_CLAUSE_ELEMENTS
 #endif
 
-// ---- Occurrence DDR-spill tier (OCC_DDR_TIER) ------------------------------
-// The occurrence (litStore) page allocator hands out URAM page addresses first
-// (element addr < _FPGA_MAX_LITERAL_ELEMENTS) and, once URAM is exhausted, DDR
-// overflow page addresses. A page whose address is >= _FPGA_MAX_LITERAL_ELEMENTS
-// lives in a device-DDR arena at offset (addr - _FPGA_MAX_LITERAL_ELEMENTS).
-// Instances whose occurrence lists fit in URAM never touch DDR (zero
-// regression); only the overflow spills. Define OCC_DDR_TIER to enable; with it
-// off _FPGA_OCC_TOTAL_ELEMENTS == _FPGA_MAX_LITERAL_ELEMENTS, i.e. baseline.
-#define OCC_DDR_TIER
-#if defined(OCC_DDR_TIER)
-  #if defined(FPGA_VCK5000)
-    #define _FPGA_OCC_DDR_ELEMENTS (32768 * LIT_SLOTS_PER_WORD)
-  #else
-    #define _FPGA_OCC_DDR_ELEMENTS (65536 * LIT_SLOTS_PER_WORD)
-  #endif
+// ---- Occurrence hot/cold tier sizing ---------------------------------------
+// Two independent numbers, both counted in 512-bit page words:
+//   _OCC_CACHE_WORDS_ : the on-chip cache (URAM footprint). Must be a power of
+//                       two, since it indexes the direct-mapped cache.
+//   _OCC_TOTAL_WORDS_ : total occurrence capacity, held in DDR.
+// Keeping them separate is what lets capacity grow without spending URAM, and
+// lets the cache be shrunk for testing without shrinking capacity.
+#if defined(FPGA_VCK5000)
+  #define _OCC_CACHE_WORDS_ 32768
+  #define _OCC_TOTAL_WORDS_ 65536
 #else
-  #define _FPGA_OCC_DDR_ELEMENTS 0
+  #define _OCC_CACHE_WORDS_ 65536
+  #define _OCC_TOTAL_WORDS_ 131072
 #endif
-#define _FPGA_OCC_TOTAL_ELEMENTS (_FPGA_MAX_LITERAL_ELEMENTS + _FPGA_OCC_DDR_ELEMENTS)
+
+// Define OCC_DDR_TIER for the tiered design; without it capacity collapses back
+// onto the cache size, i.e. the original all-on-chip solver.
+#define OCC_DDR_TIER
+#if !defined(OCC_DDR_TIER)
+  #undef _OCC_TOTAL_WORDS_
+  #define _OCC_TOTAL_WORDS_ _OCC_CACHE_WORDS_
+#endif
+
+// Test-only: shrink the cache to a handful of lines so the small regression
+// instances overflow it immediately and actually execute the tiered paths --
+// misses, evictions, write-through, page walks that cross tiers and delete-time
+// compaction of DDR-resident pages. Capacity is untouched, so the same 20 cases
+// must still produce the same answers. Enable with -DOCC_CACHE_STRESS for
+// software emulation only; it is far too small to be useful in hardware.
+#if defined(OCC_CACHE_STRESS)
+  #undef _OCC_CACHE_WORDS_
+  #define _OCC_CACHE_WORDS_ 64
+#endif
+
+#define _FPGA_MAX_LITERAL_ELEMENTS (_OCC_CACHE_WORDS_ * LIT_SLOTS_PER_WORD)
+#define _FPGA_OCC_TOTAL_ELEMENTS   (_OCC_TOTAL_WORDS_ * LIT_SLOTS_PER_WORD)
 
 // litStore URAM array size stays _FPGA_MAX_LITERAL_ELEMENTS; the allocator and
 // host image span the full URAM+DDR address space.
