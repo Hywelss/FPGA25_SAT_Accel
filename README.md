@@ -179,8 +179,32 @@ a stale CU deadlock; a user hot reset restored `Device Ready`, but the DFX load
 then remained blocked at `Trying to program device`. This is a shared-host/card
 infrastructure block, not a solver result. The new xclbin should be tested on
 `randomG-B-Mix-n15-d05` and `sp5-26-19-bin-nons-tree-noid` after an
-administrative device recovery. The remaining static scalability wall is the
-524,288-element on-chip literal-occurrence store.
+administrative device recovery.
+
+Phase-3 verification on VCK5000 (Vitis/XRT 2022.2):
+
+- the occurrence table is now DDR-authoritative with the on-chip array acting as
+  a direct-mapped cache of 512-bit page words, so residency follows access;
+- the delete-time occurrence-to-clause back-reference map moved to DDR, which
+  freed 48 URAMs and removed the ceiling that made occurrence capacity grow with
+  on-chip metadata;
+- occurrence capacity rises from 524,288 to 1,048,576 elements, lifting the
+  usable variable count from roughly 16,384 to the full 32,768 (each variable
+  costs at least 32 occurrence elements: two lists padded to 16-element pages);
+- all 20 cases pass software emulation both normally and under
+  `EXTRA_DEFINES=-DOCC_CACHE_STRESS`, which shrinks the cache to 64 lines so the
+  small instances are forced through the miss, eviction, write-through and
+  cross-tier walk paths while returning identical answers;
+- the BCP walk holds II=1; the routed design meets the nominal 220 MHz target
+  with WNS -0.023 ns and uses 336/463 URAMs (72.6%), against 414 in phase 2;
+- an on-board 20,000-variable instance builds a 638,544-element occurrence image
+  -- beyond the phase-2 store -- and solves in 11.2 ms.
+
+Being under-constrained, that instance finishes without conflicts, so it
+demonstrates capacity rather than sustained behaviour under learning and
+garbage collection. An industrial instance above 16,384 variables that does
+force conflict learning is still wanted, as are the `randomG-B-Mix-n15-d05` and
+`sp5-26-19-bin-nons-tree-noid` runs.
 
 To reproduce the successful run from the repository root:
 

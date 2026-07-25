@@ -116,11 +116,12 @@ The complete target design continues to separate storage by access behavior:
 
 The implemented DDR arena uses stable clause IDs, 512-bit alignment, burst
 fetches, and multiple outstanding NoC requests. The next capacity wall is the
-URAM occurrence-list store. Moving immutable original occurrences to a compact
-DDR index while retaining learned watch updates in URAM is the next step toward
-larger structural instances. BCP should then move toward two watched literals,
-banked watch queues, request coalescing, and a small low-LBD/original-clause
-cache.
+URAM occurrence-list store; Phase 3 below removes it. That phase caches
+occurrence pages by access rather than moving the immutable original
+occurrences wholesale to DDR, because those lists are read on every BCP step and
+relegating them all to DDR would slow propagation for every instance. BCP should
+then move toward banked watch queues, request coalescing, and a small
+low-LBD/original-clause cache.
 
 The installed VCK5000 platform describes four DDR4-3200 channels but exposes
 them to Vitis kernels through the aggregate `MC_NOC0` memory tag. The tiered
@@ -131,7 +132,118 @@ the Versal NoC and memory controllers to distribute traffic across channels.
 The hot-tier cache and request coalescer must absorb the irregular single-clause
 access pattern before it reaches that interface.
 
-## Phase 3: AIE heuristic plane
+## Phase 3: occurrence hot/cold tier
+
+Phase 2 left the URAM occurrence store as the capacity wall. Phase 3 removes it
+by making DDR authoritative for the whole occurrence table and turning the
+on-chip array into a direct-mapped cache of 512-bit page words.
+
+### Why a cache rather than a static split
+
+Two cheaper arrangements were tried first and rejected.
+
+Packing the occurrence entries (21-bit clause IDs, 24 slots per 512-bit page
+instead of 16) is functionally correct -- all 20 regression cases pass with it
+enabled -- but timing-infeasible here. The geometry forces non-power-of-two
+`/24` and `%24` address arithmetic and unaligned 21-bit slicing through a barrel
+shifter, in the II=1 BCP walk. The routed design reached WNS -27.5 ns against a
+baseline of -0.16 ns. It survives behind `LIT_STORE_PACK`, off by default.
+
+Spilling instead of packing -- allocate URAM pages first, overflow to DDR --
+routes and meets timing, but it is capacity fallback rather than a tiering
+policy: placement follows allocation order, so a list that is never read can
+hold fast memory while one BCP walks every step sits in DDR, and nothing ever
+migrates.
+
+Caching gives residency that follows access. It also avoids the expensive part
+of migration: element addresses no longer encode a tier and never change, so
+`lmd` and the occurrence-to-clause back-reference map are untouched by promotion
+and eviction. A cache line is one page word, exactly the granularity
+`colorStream` walks, which additionally makes the second of the two 8-slot chunk
+reads of a 16-slot page a guaranteed hit. Writes are write-through and refresh
+the line, and BCP never runs concurrently with learning or deletion, so there is
+no coherence problem to solve.
+
+### Cold metadata
+
+`location_handler`'s `mLitToClsStorePos` is indexed by occurrence element
+address and is read only while clauses are being deleted. Holding it on chip
+cost 112 URAMs across the two position maps and, worse, forced it to grow in
+lockstep with the occurrence address space -- it, not the occurrence store, was
+the real capacity ceiling. Moving it to a device-only DDR buffer freed 48 URAMs
+(location_handler 112 -> 64) and removed the ceiling.
+
+It also fixed a latent out-of-bounds write: the map was sized for the URAM-only
+address space, so it was overrun exactly when the tier began doing its job. All
+20 software-emulation cases passed while that bug was present, because every
+regression instance fits on chip and never exercised the tiered paths.
+
+### Verification
+
+`OCC_CACHE_STRESS` shrinks the cache to 64 lines while leaving capacity
+untouched, so the existing instances overflow it by two orders of magnitude and
+must execute misses, evictions, write-through, page walks that cross tiers and
+delete-time compaction of DDR-resident pages, while still producing identical
+answers. Under it the learning/minimize trip counts and decision/backtrack
+statistics match the unstressed run exactly, so the tier changes where data
+lives without perturbing the search.
+
+Two scheduling results were needed to keep the BCP walk at II=1. HLS reserves
+the *declared* m_axi latency on every iteration of a pipelined loop, so
+`latency=40` on the occurrence port inflated the walk to II=24 whether or not a
+miss occurred; a short declared latency lets the schedule stay tight and the AXI
+handshake stall only on an actual miss. Separately, because a 16-slot page word
+feeds two consecutive 8-slot iterations, a cache fill creates a distance-1
+read-after-write on the line the next iteration reads, which costs II=2 on its
+own; a small register window of recent (word, value) pairs answers the repeat
+access without touching the arrays, the same bypass idiom the `lmd` and
+`clsStates` walks already use.
+
+An earlier attempt served misses from a sibling dataflow process over a
+request/response stream pair. That reaches II=1 too, but the two processes feed
+each other and a Vitis HLS dataflow region must be feed-forward: it built and
+routed cleanly, then deadlocked on the board with all seven CUs stuck in START.
+It had also been compiled in only under `FPGA_HW`, so software emulation
+exercised a different path than the hardware and could not have caught it.
+Misses are now served by an inline load, and simulation and hardware run the
+same code.
+
+### Phase-3 results
+
+The routed VCK5000 design meets timing at the nominal 220 MHz target with
+WNS -0.023 ns and no hold violations, and uses 336 of 463 URAMs (72.6%):
+location_handler 64, clause_store_handler 124, solver 148.
+
+| | Phase 2 baseline | Phase 3 |
+|---|---|---|
+| Occurrence capacity | 524,288 elements | 1,048,576 elements |
+| Usable variables | ~16,384 | 32,768 |
+| URAM | 414/463 (89.4%) | 336/463 (72.6%) |
+| BCP initiation interval | 1 | 1 |
+| Routed WNS | -0.160 ns | -0.023 ns |
+
+The variable figure follows from the page layout: each variable keeps a positive
+and a negative occurrence list, each padded to a 16-element page, so an instance
+costs at least 32 occurrence elements per variable that appears. The Phase-2
+store therefore capped usable instances near 16,384 variables regardless of the
+32,768-variable literal limit, and Phase 3 unlocks the full range.
+
+On-board capacity check: a 20,000-variable, 40,000-clause instance builds a
+638,544-element occurrence image, 21.8% beyond the Phase-2 store, and solves in
+11.2 ms. Being under-constrained it finishes without conflicts, so it
+demonstrates capacity rather than sustained behaviour under learning and garbage
+collection; an industrial instance above 16,384 variables that does force
+conflict learning is still wanted.
+
+### Remaining work
+
+The 127 free URAMs are the budget for the clause-side hot tier the table above
+still calls for: pinning binary and low-LBD clauses, a small original-clause
+cache, and request coalescing in front of the NoC. The occurrence cache is
+direct-mapped, so conflict misses are possible even when capacity would suffice;
+set associativity, or biasing residency by VSIDS activity, would address that.
+
+## Phase 4: AIE heuristic plane
 
 GNN inference is kept off the correctness-critical BCP path. A PL collector
 emits batched variable deltas using the versioned 128-bit packets under
