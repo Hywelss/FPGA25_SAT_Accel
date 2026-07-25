@@ -619,7 +619,18 @@ void clause_store_handler(ap_uint<512>* originalClauseStore1, ap_uint<512>* orig
             cmd.numElements = getCommand.data.range(31,0);
 
             ap_axiu<32,0,0,0> sendData;
-            if((freeClsPageAddresses.size()*(CLAUSE_PAGE_SIZE-1) < cmd.numElements) || freeClsID.empty()){
+            // Reserve one spare page. saveData below takes a fresh page every
+            // time its offset reaches CLAUSE_PAGE_SIZE-1, including on the last
+            // element when numElements is a multiple of CLAUSE_PAGE_SIZE-1, so
+            // it can consume one more page than the element count implies. It
+            // also reads the allocator without checking it first, and an empty
+            // mmuStream returns an uninitialised entry rather than failing, so
+            // the surplus read would hand out a garbage page address and write
+            // outside mLearnedClsStore. Only reachable with the store nearly
+            // full, which is where the hard UNSAT instances end up.
+            if((freeClsPageAddresses.size() == 0) ||
+               ((freeClsPageAddresses.size()-1)*(CLAUSE_PAGE_SIZE-1) < cmd.numElements) ||
+               freeClsID.empty()){
                 sendData.data = -4;
                 clauseStoreOutputStream1.write(sendData);
             }else{
