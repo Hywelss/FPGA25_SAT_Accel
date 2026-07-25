@@ -32,7 +32,7 @@ void undo_states_and_minimize_task_parallel_wrapper(hls::stream<ap_axiu<32,0,0,0
     ap_uint<512> validBitMinimize[_FPGA_PARALLEL_MINIMIZE][_FPGA_MAX_LITERALS/512],
     ap_uint<2> mergeScratchPadMinimize[_FPGA_PARALLEL_MINIMIZE][_FPGA_MAX_LITERALS],
     unsigned int nonRemovableCount[_FPGA_PARALLEL_MINIMIZE], bool didSimplify[_FPGA_PARALLEL_MINIMIZE], const cls unitByCls[_FPGA_MAX_LITERALS],
-    const ap_uint<512> litStore[_FPGA_MAX_LITERAL_ELEMENTS/LIT_SLOTS_PER_WORD], ap_int<512>* litStoreDDR, occTagEntry* occCacheTag,
+    ap_uint<512> litStore[_FPGA_MAX_LITERAL_ELEMENTS/LIT_SLOTS_PER_WORD], ap_int<512>* litStoreDDR, occTagEntry* occCacheTag,
     const lit answerStack[_FPGA_MAX_LITERALS],  
     const lit literalCommit, const unsigned int backtrackHeight, unsigned int& answerStackHeight, 
     const bool foundAbsolute, const unsigned int LITERAL_PAGE_SIZE, const ap_uint<1> POSITIVE_LIT_PHASE_VAL, const unsigned int clearIterations,
