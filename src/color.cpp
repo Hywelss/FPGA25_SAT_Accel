@@ -2,9 +2,10 @@
 
 int splitResidualCnt = 0;
 unsigned int checkCnt = 0;
-void colorStream(hls::stream<colorValue>* toStateUpdater, 
+void colorStream(hls::stream<colorValue>* toStateUpdater,
     hls::stream<colorAssignment>& toColorStream, hls::stream<bool>* stopSending,
-    const ap_uint<512> litStore[_FPGA_MAX_LITERAL_ELEMENTS/LIT_SLOTS_PER_WORD], const unsigned int LITERAL_PAGE_SIZE,
+    const ap_uint<512> litStore[_FPGA_MAX_LITERAL_ELEMENTS/LIT_SLOTS_PER_WORD], const ap_int<512>* litStoreDDR,
+    const unsigned int LITERAL_PAGE_SIZE,
     lit* literalCommit, const unsigned int type, ap_uint<64>* litStoreAccessStats){
     #pragma HLS inline off
 
@@ -41,7 +42,7 @@ void colorStream(hls::stream<colorValue>* toStateUpdater,
             }
         }
 
-        val = litStore[address/LIT_SLOTS_PER_WORD];
+        val = occReadWord(litStore, litStoreDDR, address/LIT_SLOTS_PER_WORD);
 
         if(state == 0){
             if(readOne.eos || stopSendingRead){

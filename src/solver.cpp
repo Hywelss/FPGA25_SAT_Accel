@@ -302,7 +302,7 @@ void solver(clsStatePCIE* clsStates, ap_int<512>* litStore, lit* answerStack,
 
             bcp_discover_dataflow_wrapper(mClsStates,
                 mAnswerStack, mlmd, mlmmd, unitByCls,
-                mLitStore,
+                mLitStore, litStore,
                 answerStackHeight, unsatClauses, fixedDecisionStackHeight, literalCommit, doBackTrack,
                 topLiteral, litToCheck, fixedDecisionStackHeight, decisionLevel, useFlipped, firstIteration, 
                 LITERAL_PAGE_SIZE, POSITIVE_LIT_PHASE_VAL,
@@ -465,7 +465,7 @@ void solver(clsStatePCIE* clsStates, ap_int<512>* litStore, lit* answerStack,
             int givenClsID;
 
             learnClause(mClsStates,
-                mLitStore,
+                mLitStore, litStore,
                 mlmd, mlmmd, insertPropagate, freeLitPageAddresses,
                 decisionLevel, givenClsID,
                 mAnswerStack, unitByCls, literalCommit, answerStackHeight,
@@ -529,7 +529,7 @@ void solver(clsStatePCIE* clsStates, ap_int<512>* litStore, lit* answerStack,
 
                 clauseStoreInputStream1.write(sendClauseInputCommand);
 
-                deleteTransposedClauses(mLitStore,
+                deleteTransposedClauses(mLitStore, litStore,
                     mlmd, freeLitPageAddresses, LITERAL_PAGE_SIZE, 
                     clauseStoreInputStream1, clauseStoreOutputStream1, locationOutputStream);
 

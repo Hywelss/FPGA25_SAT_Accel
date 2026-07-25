@@ -46,6 +46,14 @@ void copy_litStore(ap_uint<512> mLitStore[_FPGA_MAX_LITERAL_ELEMENTS/LIT_SLOTS_P
     if(literalElements%LIT_SLOTS_PER_WORD != 0){
         literalElements16++;
     }
+    // Only the URAM-resident prefix is staged on chip. Words at/above
+    // _MAX_PAGES_LIT_STORE_ are the DDR overflow tier and stay resident in this
+    // same buffer, accessed in place via occReadWord/occWriteWord. (Below the
+    // threshold DDR becomes stale after this copy, which is safe because those
+    // addresses are always served from URAM.)
+    if(literalElements16 > _MAX_PAGES_LIT_STORE_){
+        literalElements16 = _MAX_PAGES_LIT_STORE_;
+    }
     COPY_LIT_STORE: for(unsigned int i = 0; i < literalElements16; i++){
         #pragma HLS loop_tripcount min=1024 max=1024
         mLitStore[i] = reg(reg(litStore[i]));
