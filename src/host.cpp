@@ -380,10 +380,26 @@ void parseDIMACS(std::string filePath, problemData& pd, const rapidjson::Documen
         }
     }*/
 
-    std::cout << "INPUT CHECK: " << 
+    std::cout << "INPUT CHECK: " <<
         "ABSOLUTE LITERALS: " << decisionStore.size() << "/" << pd.md.numLiterals <<
-        " PRESOLVED COUNT: " << preSolvedCount << "/" << pd.md.numClauses << 
+        " PRESOLVED COUNT: " << preSolvedCount << "/" << pd.md.numClauses <<
         " NUMBER OF ELEMENTS: " << pd.md.literalElements << " " << pd.md.clauseElements << "\n";
+
+    // Make the occurrence tier configuration observable: which build is being
+    // tested, and whether this instance can actually fit in the hot tier. If
+    // the occurrence image is larger than the cache, the run necessarily
+    // exercises misses, evictions and cross-tier page walks.
+    std::cout << "OCCURRENCE TIER: cache " << _OCC_CACHE_WORDS_ << " words ("
+        << _FPGA_MAX_LITERAL_ELEMENTS << " elements)"
+#if defined(OCC_CACHE_STRESS)
+        << " [OCC_CACHE_STRESS]"
+#endif
+        << ", capacity " << _FPGA_OCC_TOTAL_ELEMENTS << " elements"
+        << ", this instance uses " << pd.md.literalElements << " -> "
+        << (pd.md.literalElements > _FPGA_MAX_LITERAL_ELEMENTS
+                ? "EXCEEDS CACHE (tiered paths exercised)"
+                : "fits in cache")
+        << "\n";
     std::cout << "DISTRIBUTION OF MEMORY: " << "\n";
     for(unsigned int i = 0; i < 2; i++){
         for(unsigned int j = 0; j < histogram[i].size(); j++){
