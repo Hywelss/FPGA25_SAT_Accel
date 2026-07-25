@@ -51,9 +51,34 @@ void colorStream(hls::stream<colorValue>* toStateUpdater,
 
     const unsigned int READ_CHUNK_SIZE=_FPGA_CLS_STATES_PARTITION;
 
+#if defined(OCC_DDR_STREAMED)
+    // A 16-slot page word serves READ_CHUNK_SIZE=8 slots per iteration, so the
+    // same word is consumed by two consecutive iterations. Going through the
+    // cache arrays for the second one creates a distance-1 read-after-write on a
+    // miss and costs an initiation interval (measured II 1 -> 2). Keep the last
+    // few (word, value) pairs in registers and answer from them instead, the
+    // same bypass idiom the lmd/clsStates walks already use. Line reuse beyond
+    // this window needs a fresh address that collides in the direct-mapped
+    // index, which a sequential page walk does not produce, so the arrays can be
+    // declared free of cross-iteration dependence.
+    const int OCC_BYPASS = _FPGA_DISC_LMD_DEP_DIST;
+    unsigned int bypassWord[_FPGA_DISC_LMD_DEP_DIST];
+    #pragma HLS array_partition variable=bypassWord complete
+    ap_uint<512> bypassVal[_FPGA_DISC_LMD_DEP_DIST];
+    #pragma HLS array_partition variable=bypassVal complete
+    INVALID_OCC_BYPASS: for(unsigned int i = 0; i < OCC_BYPASS; i++){
+        #pragma HLS unroll
+        bypassWord[i] = 0xFFFFFFFFu;
+    }
+#endif
+
     COLOR_STREAM: while(true){
         #pragma HLS loop_tripcount min=1024 max=1024
         #pragma HLS pipeline II=1
+#if defined(OCC_DDR_STREAMED)
+        #pragma HLS dependence variable=litStore inter false
+        #pragma HLS dependence variable=occCacheTag inter false
+#endif
 
         if(type == 0){
             if(stopSending->read_nb(stopSendingRead)){
@@ -69,16 +94,35 @@ void colorStream(hls::stream<colorValue>* toStateUpdater,
         // (dynamic stall) rather than a direct m_axi load, which would force the
         // whole loop to be scheduled for DRAM latency.
         {
-            const unsigned int L = occLine(occWord);
-            const occTagEntry T = occTagOf(occWord);
-            if(occCacheTag[L] == T){
-                val = litStore[L];
-            }else{
-                occReq.write(occWord);
-                val = occResp.read();
-                litStore[L] = val;
-                occCacheTag[L] = T;
+            bool bypassed = false;
+            for(unsigned int i = 0; i < OCC_BYPASS; i++){
+                #pragma HLS unroll
+                if(bypassWord[i] == occWord){
+                    val = bypassVal[i];
+                    bypassed = true;
+                }
             }
+
+            if(!bypassed){
+                const unsigned int L = occLine(occWord);
+                const occTagEntry T = occTagOf(occWord);
+                if(occCacheTag[L] == T){
+                    val = litStore[L];
+                }else{
+                    occReq.write(occWord);
+                    val = occResp.read();
+                    litStore[L] = val;
+                    occCacheTag[L] = T;
+                }
+            }
+
+            for(unsigned int i = 0; i < OCC_BYPASS-1; i++){
+                #pragma HLS unroll
+                bypassWord[i] = bypassWord[i+1];
+                bypassVal[i] = bypassVal[i+1];
+            }
+            bypassWord[OCC_BYPASS-1] = occWord;
+            bypassVal[OCC_BYPASS-1] = val;
         }
 #else
         val = occReadWord(litStore, occCacheTag, litStoreDDR, occWord);
