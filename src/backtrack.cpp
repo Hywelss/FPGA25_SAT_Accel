@@ -133,7 +133,7 @@ void updateStatesBackward(hls::stream<colorValue>& toStateUpdater,
 void undo_states_dataflow_wrapper(hls::stream<ap_axiu<32,0,0,0>>& pqHandlerInput, 
     clsState clsStates[_FPGA_CLS_STATES_PARTITION][_FPGA_MAX_CLAUSES/_FPGA_CLS_STATES_PARTITION],
     const lit answerStack[_FPGA_MAX_LITERALS], literalMetaData lmd[_FPGA_MAX_LITERALS],
-    const ap_uint<512> literalStore[_FPGA_MAX_LITERAL_ELEMENTS/LIT_SLOTS_PER_WORD], const ap_int<512>* litStoreDDR,
+    ap_uint<512> literalStore[_FPGA_MAX_LITERAL_ELEMENTS/LIT_SLOTS_PER_WORD], const ap_int<512>* litStoreDDR, occTagEntry* occCacheTag,
     const lit literalCommit, const unsigned int backtrackHeight, unsigned int& answerStackHeight,
     const unsigned int LITERAL_PAGE_SIZE, const ap_uint<1> POSITIVE_LIT_PHASE_VAL, ap_uint<64> litStoreAccessStats[4]){
 
@@ -160,10 +160,10 @@ void undo_states_dataflow_wrapper(hls::stream<ap_axiu<32,0,0,0>>& pqHandlerInput
         backtrackHeight, POSITIVE_LIT_PHASE_VAL);
 
 #if defined(OCC_DDR_STREAMED)
-    colorStream(toStateUpdater, toColorStream, nullptr, literalStore, litStoreDDR, occReq, occResp, LITERAL_PAGE_SIZE, nullptr, 1, litStoreAccessStats);
+    colorStream(toStateUpdater, toColorStream, nullptr, literalStore, litStoreDDR, occCacheTag, occReq, occResp, LITERAL_PAGE_SIZE, nullptr, 1, litStoreAccessStats);
     occDdrPageReader(occReq, occResp, litStoreDDR);
 #else
-    colorStream(toStateUpdater, toColorStream, nullptr, literalStore, litStoreDDR, LITERAL_PAGE_SIZE, nullptr, 1, litStoreAccessStats);
+    colorStream(toStateUpdater, toColorStream, nullptr, literalStore, litStoreDDR, occCacheTag, LITERAL_PAGE_SIZE, nullptr, 1, litStoreAccessStats);
 #endif
 
     updateStatesBackward(toStateUpdater[0], clsStates[0], 0);

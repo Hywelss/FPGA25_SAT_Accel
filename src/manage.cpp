@@ -2,7 +2,7 @@
 
 void allocatePage(hls::stream<lit>& litNewPage, mmuStream<unsigned int, _MAX_PAGES_LIT_STORE_TOTAL_>& freeLitPageAddresses,
     literalMetaData lmd[_FPGA_MAX_LITERALS], 
-    ap_uint<512> litStore[_FPGA_MAX_LITERAL_ELEMENTS/LIT_SLOTS_PER_WORD], ap_int<512>* litStoreDDR, int& error,
+    ap_uint<512> litStore[_FPGA_MAX_LITERAL_ELEMENTS/LIT_SLOTS_PER_WORD], ap_int<512>* litStoreDDR, occTagEntry* occCacheTag, int& error,
     const unsigned int LITERAL_PAGE_SIZE){
     #pragma HLS inline off
     ALLOCATE_PAGE: while(true){
@@ -29,16 +29,16 @@ void allocatePage(hls::stream<lit>& litNewPage, mmuStream<unsigned int, _MAX_PAG
         unsigned int reqAddrLit = LMD_LATEST_PAGE(getLmd.compactlmd,select)/LIT_SLOTS_PER_WORD;
 
         const unsigned int linkWord = reqAddrLit + LITERAL_PAGE_SIZE/LIT_SLOTS_PER_WORD - 1;
-        ap_uint<512> fetchLine = occReadWord(litStore, litStoreDDR, linkWord);
+        ap_uint<512> fetchLine = occReadWord(litStore, occCacheTag, litStoreDDR, linkWord);
         LIT_NEXT_PTR(fetchLine) = freePageAddress;
-        occWriteWord(litStore, litStoreDDR, linkWord, fetchLine);
+        occWriteWord(litStore, occCacheTag, litStoreDDR, linkWord, fetchLine);
 
         LMD_LATEST_PAGE(getLmd.compactlmd,select) = freePageAddress;
         LMD_FREE_SPACE(getLmd.compactlmd,select) = LITERAL_PAGE_SIZE-2;
 
         ap_uint<512> clearLastSubPage = 0;
         LIT_BACK_PTR(clearLastSubPage) = reqAddrLit*LIT_SLOTS_PER_WORD;
-        occWriteWord(litStore, litStoreDDR,
+        occWriteWord(litStore, occCacheTag, litStoreDDR,
             freePageAddress/LIT_SLOTS_PER_WORD + LITERAL_PAGE_SIZE/LIT_SLOTS_PER_WORD - 1, clearLastSubPage);
 
         lmd[abs(getLit)-1] = getLmd;
@@ -46,7 +46,7 @@ void allocatePage(hls::stream<lit>& litNewPage, mmuStream<unsigned int, _MAX_PAG
 }
 
 
-void deleteTransposedClauses(ap_uint<512> litStore[_FPGA_MAX_LITERAL_ELEMENTS/LIT_SLOTS_PER_WORD], ap_int<512>* litStoreDDR,
+void deleteTransposedClauses(ap_uint<512> litStore[_FPGA_MAX_LITERAL_ELEMENTS/LIT_SLOTS_PER_WORD], ap_int<512>* litStoreDDR, occTagEntry* occCacheTag,
     literalMetaData lmd[_FPGA_MAX_LITERALS],
     mmuStream<unsigned int,_MAX_PAGES_LIT_STORE_TOTAL_>& freeLitPageAddresses, const unsigned int LITERAL_PAGE_SIZE, 
     hls::stream<ap_axiu<96,0,0,0>>& clauseStoreInputStream1, hls::stream<ap_axiu<32,0,0,0>>& clauseStoreOutputStream1, hls::stream<ap_axiu<32,0,0,0>>& locationOutputStream){
@@ -86,7 +86,7 @@ void deleteTransposedClauses(ap_uint<512> litStore[_FPGA_MAX_LITERAL_ELEMENTS/LI
             unsigned int freeSpace = LMD_FREE_SPACE(getLmd.compactlmd,selectSide);
             unsigned int reqAddrOffsetMove = LITERAL_PAGE_SIZE - freeSpace - 2 - 1;
 
-            ap_uint<512> replaceFetch = occReadWord(litStore, litStoreDDR, address/LIT_SLOTS_PER_WORD);
+            ap_uint<512> replaceFetch = occReadWord(litStore, occCacheTag, litStoreDDR, address/LIT_SLOTS_PER_WORD);
             ap_uint<512> moveFetch;
 
             unsigned int previousLatestPage = latestPage;
@@ -96,7 +96,7 @@ void deleteTransposedClauses(ap_uint<512> litStore[_FPGA_MAX_LITERAL_ELEMENTS/LI
             if(freeSpace == LITERAL_PAGE_SIZE-2){
                 freeLitPageAddresses.write(latestPage*LIT_SLOTS_PER_WORD);
 
-                moveFetch = occReadWord(litStore, litStoreDDR, latestPage+LITERAL_PAGE_SIZE/LIT_SLOTS_PER_WORD-1);
+                moveFetch = occReadWord(litStore, occCacheTag, litStoreDDR, latestPage+LITERAL_PAGE_SIZE/LIT_SLOTS_PER_WORD-1);
                 LMD_LATEST_PAGE(getLmd.compactlmd,selectSide) = LIT_BACK_PTR(moveFetch);
                 LMD_FREE_SPACE(getLmd.compactlmd,selectSide) = 1;
                 reqAddrOffsetMove = LITERAL_PAGE_SIZE - 2 - 1;
@@ -113,16 +113,16 @@ void deleteTransposedClauses(ap_uint<512> litStore[_FPGA_MAX_LITERAL_ELEMENTS/LI
                 LIT_SLOT(replaceFetch, address%LIT_SLOTS_PER_WORD) = movedCls;
                 LIT_SLOT(replaceFetch, reqAddrOffsetMove%LIT_SLOTS_PER_WORD) = 0;
 
-                occWriteWord(litStore, litStoreDDR, address/LIT_SLOTS_PER_WORD, replaceFetch);
+                occWriteWord(litStore, occCacheTag, litStoreDDR, address/LIT_SLOTS_PER_WORD, replaceFetch);
             }else{
-                moveFetch = occReadWord(litStore, litStoreDDR, latestPage + reqAddrOffsetMove/LIT_SLOTS_PER_WORD);
+                moveFetch = occReadWord(litStore, occCacheTag, litStoreDDR, latestPage + reqAddrOffsetMove/LIT_SLOTS_PER_WORD);
                 movedCls = LIT_SLOT(moveFetch, reqAddrOffsetMove%LIT_SLOTS_PER_WORD);
 
                 LIT_SLOT(replaceFetch, address%LIT_SLOTS_PER_WORD) = movedCls;
                 LIT_SLOT(moveFetch, reqAddrOffsetMove%LIT_SLOTS_PER_WORD) = 0;
 
-                occWriteWord(litStore, litStoreDDR, address/LIT_SLOTS_PER_WORD, replaceFetch);
-                occWriteWord(litStore, litStoreDDR, latestPage + reqAddrOffsetMove/LIT_SLOTS_PER_WORD, moveFetch);
+                occWriteWord(litStore, occCacheTag, litStoreDDR, address/LIT_SLOTS_PER_WORD, replaceFetch);
+                occWriteWord(litStore, occCacheTag, litStoreDDR, latestPage + reqAddrOffsetMove/LIT_SLOTS_PER_WORD, moveFetch);
             }
 
             ap_axiu<96,0,0,0> sendData;

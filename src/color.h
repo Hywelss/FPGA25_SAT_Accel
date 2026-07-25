@@ -29,7 +29,7 @@ void occDdrPageReader(hls::stream<unsigned int>& occReq, hls::stream<ap_uint<512
 
 void colorStream(hls::stream<colorValue>* toStateUpdater,
     hls::stream<colorAssignment>& toColorStream, hls::stream<bool>* stopSending,
-    const ap_uint<512> litStore[_FPGA_MAX_LITERAL_ELEMENTS/LIT_SLOTS_PER_WORD], const ap_int<512>* litStoreDDR,
+    ap_uint<512> litStore[_FPGA_MAX_LITERAL_ELEMENTS/LIT_SLOTS_PER_WORD], const ap_int<512>* litStoreDDR, occTagEntry* occCacheTag,
 #if defined(OCC_DDR_STREAMED)
     hls::stream<unsigned int>& occReq, hls::stream<ap_uint<512>>& occResp,
 #endif

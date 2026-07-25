@@ -20,7 +20,7 @@ void occDdrPageReader(hls::stream<unsigned int>& occReq, hls::stream<ap_uint<512
 
 void colorStream(hls::stream<colorValue>* toStateUpdater,
     hls::stream<colorAssignment>& toColorStream, hls::stream<bool>* stopSending,
-    const ap_uint<512> litStore[_FPGA_MAX_LITERAL_ELEMENTS/LIT_SLOTS_PER_WORD], const ap_int<512>* litStoreDDR,
+    ap_uint<512> litStore[_FPGA_MAX_LITERAL_ELEMENTS/LIT_SLOTS_PER_WORD], const ap_int<512>* litStoreDDR, occTagEntry* occCacheTag,
 #if defined(OCC_DDR_STREAMED)
     hls::stream<unsigned int>& occReq, hls::stream<ap_uint<512>>& occResp,
 #endif
@@ -63,16 +63,25 @@ void colorStream(hls::stream<colorValue>* toStateUpdater,
 
         const unsigned int occWord = address/LIT_SLOTS_PER_WORD;
 #if defined(OCC_DDR_STREAMED)
-        if(occWord < _MAX_PAGES_LIT_STORE_){
-            val = litStore[occWord];
-        }else{
-            // Dynamic stall on the sibling reader instead of statically
-            // scheduling this loop for DRAM latency.
-            occReq.write(occWord);
-            val = occResp.read();
+        // Hot path: probe the direct-mapped page cache. A hit is a plain URAM
+        // read, so an instance whose working set stays resident runs exactly as
+        // fast as the all-on-chip design. A miss is served over the stream
+        // (dynamic stall) rather than a direct m_axi load, which would force the
+        // whole loop to be scheduled for DRAM latency.
+        {
+            const unsigned int L = occLine(occWord);
+            const occTagEntry T = occTagOf(occWord);
+            if(occCacheTag[L] == T){
+                val = litStore[L];
+            }else{
+                occReq.write(occWord);
+                val = occResp.read();
+                litStore[L] = val;
+                occCacheTag[L] = T;
+            }
         }
 #else
-        val = occReadWord(litStore, litStoreDDR, occWord);
+        val = occReadWord(litStore, occCacheTag, litStoreDDR, occWord);
 #endif
 
         if(state == 0){

@@ -120,19 +120,56 @@ const unsigned int _MAX_PAGES_LIT_STORE_=_FPGA_MAX_LITERAL_ELEMENTS/LIT_SLOTS_PE
 const unsigned int _MAX_PAGES_LIT_STORE_TOTAL_=_FPGA_OCC_TOTAL_ELEMENTS/LIT_SLOTS_PER_WORD;
 const unsigned int _MAX_PAGES_CLS_STORE_=_FPGA_MAX_CLAUSE_ELEMENTS/4;
 
-// Occurrence page access routed by 512-bit word index: URAM below the
-// _MAX_PAGES_LIT_STORE_ threshold, DDR overflow arena (the reused litStore input
-// buffer, same global word index) at/above it. With OCC_DDR_TIER off the
-// threshold equals the total word count, so the DDR branch is statically
-// unreachable and HLS drops it (and the unused ddr interface) => baseline.
-static inline ap_uint<512> occReadWord(const ap_uint<512>* uram, const ap_int<512>* ddr, unsigned int w){
+// ---- Occurrence hot/cold tier ----------------------------------------------
+// DDR (the reused litStore buffer) holds the authoritative occurrence table;
+// the on-chip array is a direct-mapped cache of 512-bit page words. Residency
+// therefore follows actual access -- a page that BCP keeps walking stays hot in
+// URAM, one that is never touched drifts out -- instead of being decided by the
+// accident of allocation order. Element addresses never change, so lmd and the
+// back-reference map are untouched by promotion/eviction.
+//
+// Cache line == one page word, which is exactly the granularity colorStream
+// walks; the two 8-slot chunk reads of a 16-slot page make the second access a
+// guaranteed hit.
+// Same on-chip array size as before (power of two, so the index is a mask).
+#define OCC_CACHE_LINES   _MAX_PAGES_LIT_STORE_
+#define OCC_TAG_BITS      16
+// [valid][tag]
+typedef ap_uint<OCC_TAG_BITS+1> occTagEntry;
+
+static inline unsigned int occLine(unsigned int w){
     #pragma HLS inline
-    return (w < _MAX_PAGES_LIT_STORE_) ? uram[w] : (ap_uint<512>)ddr[w];
+    return w & (OCC_CACHE_LINES-1);
 }
-static inline void occWriteWord(ap_uint<512>* uram, ap_int<512>* ddr, unsigned int w, ap_uint<512> v){
+static inline occTagEntry occTagOf(unsigned int w){
     #pragma HLS inline
-    if(w < _MAX_PAGES_LIT_STORE_) uram[w] = v;
-    else ddr[w] = (ap_int<512>)v;
+    occTagEntry t = w / OCC_CACHE_LINES;
+    t.range(OCC_TAG_BITS,OCC_TAG_BITS) = 1;   // valid
+    return t;
+}
+
+// Read/write outside the BCP hot loop (clause learning, page allocation,
+// delete-time compaction): a miss loads straight from DDR. Writes are
+// write-through and refresh the line, so the cache never goes stale.
+static inline ap_uint<512> occReadWord(ap_uint<512>* cacheData, occTagEntry* cacheTag,
+    const ap_int<512>* ddr, unsigned int w){
+    #pragma HLS inline
+    const unsigned int L = occLine(w);
+    const occTagEntry T = occTagOf(w);
+    if(cacheTag[L] == T){
+        return cacheData[L];
+    }
+    const ap_uint<512> v = (ap_uint<512>)ddr[w];
+    cacheData[L] = v;
+    cacheTag[L] = T;
+    return v;
+}
+static inline void occWriteWord(ap_uint<512>* cacheData, occTagEntry* cacheTag,
+    ap_int<512>* ddr, unsigned int w, ap_uint<512> v){
+    #pragma HLS inline
+    ddr[w] = (ap_int<512>)v;
+    cacheData[occLine(w)] = v;
+    cacheTag[occLine(w)] = occTagOf(w);
 }
 
 extern int spentRemoving;
