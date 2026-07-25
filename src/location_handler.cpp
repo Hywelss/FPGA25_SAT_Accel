@@ -50,7 +50,12 @@ void location_handler(ap_uint<128>* litToClsStorePos,
             ap_uint<128> getAddr = 0;
             SET_LIT_AND_CLS_STORE_LOCATION: while(true){
                 #pragma HLS loop_tripcount min=16 max=16
-                #pragma HLS depence variable=mLitToClsStorePos inter false
+                // No independence assertion: this loop read-modify-writes
+                // mLitToClsStorePos, which now lives in DDR, so overlapping
+                // iterations could issue a read before the previous write has
+                // landed. (The assertion that used to sit here was misspelled
+                // and therefore ignored; spelling it correctly would have been
+                // a latent corruption bug.)
                 ap_axiu<64,0,0,0> value = locationInputStream.read();
 
                 if(value.data == lh::EXIT){
@@ -73,7 +78,9 @@ void location_handler(ap_uint<128>* litToClsStorePos,
         }else if(code == lh::UPDATE){
             UPDATE_LIT_AND_CLS_STORE_LOCATION: while(true){
                 #pragma HLS loop_tripcount min=16 max=16
-                #pragma HLS dependence variable=mLitToClsStorePos inter false
+                // Same reasoning as the save loop: mLitToClsStorePos is in DDR
+                // and this loop reads two entries and writes one, so successive
+                // iterations genuinely can alias.
 
                 ap_axiu<64,0,0,0> value = locationInputStream.read();
 
