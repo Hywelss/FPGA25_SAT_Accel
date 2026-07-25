@@ -601,17 +601,11 @@ void clause_store_handler(ap_uint<512>* originalClauseStore1, ap_uint<512>* orig
                 clauseStoreInputStream1, clauseStoreInputStream2,
                 clauseStoreOutputStream1, clauseStoreOutputStream2);
             
-        }else if(code == csh::STATUS){
-            // Report allocator headroom before conflict analysis starts.  The
-            // solver uses this to schedule a safe restart/GC while one
-            // worst-case learned clause can still be admitted.
-            ap_axiu<32,0,0,0> status;
-            status.data = freeClsPageAddresses.size() * (CLAUSE_PAGE_SIZE-1);
-            clauseStoreOutputStream1.write(status);
-            status.data = freeClsID.size();
-            clauseStoreOutputStream1.write(status);
-            status.data = usedTotalIDCount;
-            clauseStoreOutputStream1.write(status);
+        // csh::STATUS is deliberately not handled. Its reply protocol -- one
+        // command in, three unlabelled words back on the shared output stream --
+        // cannot be resynchronised if that stream already holds unconsumed
+        // length replies, which is exactly the state the conflict path leaves it
+        // in. See the note in solver.cpp.
         }else if(code == csh::SAVE){
             clauseMetaData cmd;
             cmd.numElements = getCommand.data.range(31,0);

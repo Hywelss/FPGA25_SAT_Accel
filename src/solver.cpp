@@ -21,22 +21,6 @@ void sendTime(hls::stream<ap_axiu<64,0,0,0>>& timerValueStream, hls::stream<ap_a
     }
 }
 
-void queryClauseStoreCapacity(
-    unsigned int& freeClauseElements, unsigned int& freeClauseIds, unsigned int& learnedClauseCount,
-    hls::stream<ap_axiu<96,0,0,0>>& clauseStoreInputStream,
-    hls::stream<ap_axiu<32,0,0,0>>& clauseStoreOutputStream){
-    #pragma HLS inline off
-
-    ap_axiu<96,0,0,0> command;
-    command.data = 0;
-    command.data.range(95,64) = csh::STATUS;
-    clauseStoreInputStream.write(command);
-
-    freeClauseElements = clauseStoreOutputStream.read().data;
-    freeClauseIds = clauseStoreOutputStream.read().data;
-    learnedClauseCount = clauseStoreOutputStream.read().data;
-}
-
 void copyStats(ap_uint<64>* learnedStats, ap_uint<64>* longestClause, ap_uint<64>* litStoreAccessStats,
     ap_uint<64>* cycleCounter, ap_uint<64>* scalabilityStats, int* miscCounters){
     #pragma HLS inline off
@@ -433,37 +417,40 @@ void solver(clsStatePCIE* clsStates, ap_int<512>* litStore, lit* answerStack,
                 resetCount++;
             }
 
-            unsigned int freeClauseElements;
-            unsigned int freeClauseIds;
-            unsigned int learnedClauseCount;
-            queryClauseStoreCapacity(freeClauseElements, freeClauseIds, learnedClauseCount,
-                clauseStoreInputStream1, clauseStoreOutputStream1);
-
-            unsigned int freeLiteralPages = freeLitPageAddresses.size();
+            // Allocator pressure is judged from the literal-page allocator only.
+            //
+            // There used to be a queryClauseStoreCapacity() round trip here that
+            // sent csh::STATUS and then blindly read three replies. It is placed
+            // on the conflict path, where BCP has just been cut short, and
+            // controlSink keeps forwarding unit clause IDs after a conflict is
+            // detected, so clauseStoreOutputStream1 can still hold length
+            // replies that nobody consumed. The three reads then swallow those
+            // instead, the real status reply is left behind, and every
+            // subsequent exchange on that pair of streams is off by one until
+            // the design wedges.
+            //
+            // The evidence is unambiguous: on the board an instance hangs if and
+            // only if it performs at least one of these queries. A 20,000
+            // variable instance that never conflicts, and so never reaches this
+            // line, solves in 11 ms; nqueens_32 (126 queries) and bmc-ibm-3
+            // (1,714) both hang. Software emulation hides it because the kernels
+            // are threads with unbounded streams there.
+            //
+            // The clause-store figures were only feeding telemetry and a
+            // proactive-GC heuristic, neither of which is needed for capacity;
+            // the literal-page figure is local to the solver and costs nothing.
+            const unsigned int freeLiteralPages = freeLitPageAddresses.size();
             scalabilityStats[1]++;
-            if(scalabilityStats[2] > freeClauseElements){
-                scalabilityStats[2] = freeClauseElements;
-            }
-            if(scalabilityStats[3] > freeClauseIds){
-                scalabilityStats[3] = freeClauseIds;
-            }
             if(scalabilityStats[4] > freeLiteralPages){
                 scalabilityStats[4] = freeLiteralPages;
             }
 
-            const unsigned int clauseElementWatermark =
-                _FPGA_GC_HEADROOM_MULTIPLIER * _FPGA_MAX_LEARN_ELE;
             const unsigned int literalPageWatermark =
                 _FPGA_GC_HEADROOM_MULTIPLIER * _FPGA_MAX_LEARN_ELE;
-            const bool allocationPressure =
-                freeClauseElements < clauseElementWatermark ||
-                freeClauseIds < _FPGA_GC_HEADROOM_MULTIPLIER ||
-                freeLiteralPages < literalPageWatermark;
 
-            if(allocationPressure && !resetAll && learnedClauseCount > 0){
-                // The current conflict still has enough reserved headroom to
-                // finish learning.  Backtracking to level zero then makes the
-                // existing deletion path safe for the following GC.
+            if(freeLiteralPages < literalPageWatermark && !resetAll){
+                // Backtracking to level zero first is what makes the existing
+                // deletion path safe for the garbage collection that follows.
                 resetAll = true;
                 resetCount++;
                 scalabilityStats[0]++;
