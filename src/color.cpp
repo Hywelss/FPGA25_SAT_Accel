@@ -2,9 +2,28 @@
 
 int splitResidualCnt = 0;
 unsigned int checkCnt = 0;
+#if defined(OCC_DDR_STREAMED)
+void occDdrPageReader(hls::stream<unsigned int>& occReq, hls::stream<ap_uint<512>>& occResp,
+    const ap_int<512>* litStoreDDR){
+    #pragma HLS inline off
+
+    OCC_DDR_SERVE: while(true){
+        #pragma HLS loop_tripcount min=1 max=64
+        const unsigned int w = occReq.read();
+        if(w == OCC_DDR_REQ_SENTINEL){
+            break;
+        }
+        occResp.write((ap_uint<512>)litStoreDDR[w]);
+    }
+}
+#endif
+
 void colorStream(hls::stream<colorValue>* toStateUpdater,
     hls::stream<colorAssignment>& toColorStream, hls::stream<bool>* stopSending,
     const ap_uint<512> litStore[_FPGA_MAX_LITERAL_ELEMENTS/LIT_SLOTS_PER_WORD], const ap_int<512>* litStoreDDR,
+#if defined(OCC_DDR_STREAMED)
+    hls::stream<unsigned int>& occReq, hls::stream<ap_uint<512>>& occResp,
+#endif
     const unsigned int LITERAL_PAGE_SIZE,
     lit* literalCommit, const unsigned int type, ap_uint<64>* litStoreAccessStats){
     #pragma HLS inline off
@@ -42,7 +61,19 @@ void colorStream(hls::stream<colorValue>* toStateUpdater,
             }
         }
 
-        val = occReadWord(litStore, litStoreDDR, address/LIT_SLOTS_PER_WORD);
+        const unsigned int occWord = address/LIT_SLOTS_PER_WORD;
+#if defined(OCC_DDR_STREAMED)
+        if(occWord < _MAX_PAGES_LIT_STORE_){
+            val = litStore[occWord];
+        }else{
+            // Dynamic stall on the sibling reader instead of statically
+            // scheduling this loop for DRAM latency.
+            occReq.write(occWord);
+            val = occResp.read();
+        }
+#else
+        val = occReadWord(litStore, litStoreDDR, occWord);
+#endif
 
         if(state == 0){
             if(readOne.eos || stopSendingRead){
@@ -132,9 +163,15 @@ void colorStream(hls::stream<colorValue>* toStateUpdater,
         }
     }
 
+#if defined(OCC_DDR_STREAMED)
+    // Retire the sibling reader. Every loop exit funnels through here, so the
+    // dataflow region can always terminate.
+    occReq.write(OCC_DDR_REQ_SENTINEL);
+#endif
+
     if(type == 0){
         litStoreAccessStats[2] += localAccessStats[2];
-        litStoreAccessStats[0] += localAccessStats[0];    
+        litStoreAccessStats[0] += localAccessStats[0];
     }else if(type == 1){
         litStoreAccessStats[3] += localAccessStats[3];
         litStoreAccessStats[1] += localAccessStats[1];           
