@@ -557,9 +557,17 @@ void clause_store_handler(ap_uint<512>* originalClauseStore1, ap_uint<512>* orig
 
     unsigned int usedTotalIDCount = 0;
 
-    // The URAM allocator is now dedicated to learned clauses. Original clause
-    // payloads no longer consume this address space.
-    mmuStream<unsigned int, _MAX_PAGES_CLS_STORE_> freeClsPageAddresses(0,MAX_CLAUSE_ELEMENTS,CLAUSE_PAGE_SIZE);
+    // The URAM allocator is dedicated to learned clauses; original clause
+    // payloads live in DDR and no longer consume this address space.
+    //
+    // The bound is _FPGA_MAX_CLAUSE_ELEMENTS, the size of mLearnedClsStore
+    // below, and must not be the maxClauseElements argument: the host passes
+    // _HOST_MAX_CLAUSE_ELEMENTS there, which sizes the DDR arena holding the
+    // original clauses and is eight times larger. Handing out page addresses
+    // against the DDR arena's size let learning walk off the end of the on-chip
+    // array once it had used more than _FPGA_MAX_CLAUSE_ELEMENTS, corrupting
+    // whatever URAM followed. Instances that learn less than that never noticed.
+    mmuStream<unsigned int, _MAX_PAGES_CLS_STORE_> freeClsPageAddresses(0,_FPGA_MAX_CLAUSE_ELEMENTS,CLAUSE_PAGE_SIZE);
     #pragma HLS bind_storage variable=freeClsPageAddresses.array type=RAM_S2P impl=URAM latency=1
 
     mmuStream<cls, _FPGA_MAX_CLAUSES> freeClsID(ORIGINAL_CLS_CNT,_FPGA_MAX_CLAUSES,1);
