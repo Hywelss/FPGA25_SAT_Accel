@@ -146,25 +146,13 @@ void undo_states_dataflow_wrapper(hls::stream<ap_axiu<32,0,0,0>>& pqHandlerInput
     #pragma HLS stream variable=toStateUpdater depth=4
     #pragma HLS array_partition variable=toStateUpdater complete
 
-#if defined(OCC_DDR_STREAMED)
-    hls::stream<unsigned int> occReq("occDdrReqBck");
-    #pragma HLS stream variable=occReq depth=4
-    hls::stream<ap_uint<512>> occResp("occDdrRespBck");
-    #pragma HLS stream variable=occResp depth=4
-#endif
-
     #pragma HLS dataflow
 
     undoStates(pqHandlerInput, toColorStream,
         answerStack, lmd, literalCommit, answerStackHeight,
         backtrackHeight, POSITIVE_LIT_PHASE_VAL);
 
-#if defined(OCC_DDR_STREAMED)
-    colorStream(toStateUpdater, toColorStream, nullptr, literalStore, litStoreDDR, occCacheTag, occReq, occResp, LITERAL_PAGE_SIZE, nullptr, 1, litStoreAccessStats);
-    occDdrPageReader(occReq, occResp, litStoreDDR);
-#else
     colorStream(toStateUpdater, toColorStream, nullptr, literalStore, litStoreDDR, occCacheTag, LITERAL_PAGE_SIZE, nullptr, 1, litStoreAccessStats);
-#endif
 
     updateStatesBackward(toStateUpdater[0], clsStates[0], 0);
     updateStatesBackward(toStateUpdater[1], clsStates[1], 1);

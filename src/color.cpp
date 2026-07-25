@@ -2,28 +2,9 @@
 
 int splitResidualCnt = 0;
 unsigned int checkCnt = 0;
-#if defined(OCC_DDR_STREAMED)
-void occDdrPageReader(hls::stream<unsigned int>& occReq, hls::stream<ap_uint<512>>& occResp,
-    const ap_int<512>* litStoreDDR){
-    #pragma HLS inline off
-
-    OCC_DDR_SERVE: while(true){
-        #pragma HLS loop_tripcount min=1 max=64
-        const unsigned int w = occReq.read();
-        if(w == OCC_DDR_REQ_SENTINEL){
-            break;
-        }
-        occResp.write((ap_uint<512>)litStoreDDR[w]);
-    }
-}
-#endif
-
 void colorStream(hls::stream<colorValue>* toStateUpdater,
     hls::stream<colorAssignment>& toColorStream, hls::stream<bool>* stopSending,
     ap_uint<512> litStore[_FPGA_MAX_LITERAL_ELEMENTS/LIT_SLOTS_PER_WORD], const ap_int<512>* litStoreDDR, occTagEntry* occCacheTag,
-#if defined(OCC_DDR_STREAMED)
-    hls::stream<unsigned int>& occReq, hls::stream<ap_uint<512>>& occResp,
-#endif
     const unsigned int LITERAL_PAGE_SIZE,
     lit* literalCommit, const unsigned int type, ap_uint<64>* litStoreAccessStats){
     #pragma HLS inline off
@@ -51,7 +32,6 @@ void colorStream(hls::stream<colorValue>* toStateUpdater,
 
     const unsigned int READ_CHUNK_SIZE=_FPGA_CLS_STATES_PARTITION;
 
-#if defined(OCC_DDR_STREAMED)
     // A 16-slot page word serves READ_CHUNK_SIZE=8 slots per iteration, so the
     // same word is consumed by two consecutive iterations. Going through the
     // cache arrays for the second one creates a distance-1 read-after-write on a
@@ -70,15 +50,12 @@ void colorStream(hls::stream<colorValue>* toStateUpdater,
         #pragma HLS unroll
         bypassWord[i] = 0xFFFFFFFFu;
     }
-#endif
 
     COLOR_STREAM: while(true){
         #pragma HLS loop_tripcount min=1024 max=1024
         #pragma HLS pipeline II=1
-#if defined(OCC_DDR_STREAMED)
         #pragma HLS dependence variable=litStore inter false
         #pragma HLS dependence variable=occCacheTag inter false
-#endif
 
         if(type == 0){
             if(stopSending->read_nb(stopSendingRead)){
@@ -87,12 +64,9 @@ void colorStream(hls::stream<colorValue>* toStateUpdater,
         }
 
         const unsigned int occWord = address/LIT_SLOTS_PER_WORD;
-#if defined(OCC_DDR_STREAMED)
-        // Hot path: probe the direct-mapped page cache. A hit is a plain URAM
-        // read, so an instance whose working set stays resident runs exactly as
-        // fast as the all-on-chip design. A miss is served over the stream
-        // (dynamic stall) rather than a direct m_axi load, which would force the
-        // whole loop to be scheduled for DRAM latency.
+        // Probe the register bypass, then the direct-mapped page cache, then
+        // DDR. A hit is a plain URAM read, so an instance whose working set
+        // stays resident runs at the speed of the all-on-chip design.
         {
             bool bypassed = false;
             for(unsigned int i = 0; i < OCC_BYPASS; i++){
@@ -104,16 +78,7 @@ void colorStream(hls::stream<colorValue>* toStateUpdater,
             }
 
             if(!bypassed){
-                const unsigned int L = occLine(occWord);
-                const occTagEntry T = occTagOf(occWord);
-                if(occCacheTag[L] == T){
-                    val = litStore[L];
-                }else{
-                    occReq.write(occWord);
-                    val = occResp.read();
-                    litStore[L] = val;
-                    occCacheTag[L] = T;
-                }
+                val = occReadWord(litStore, occCacheTag, litStoreDDR, occWord);
             }
 
             for(unsigned int i = 0; i < OCC_BYPASS-1; i++){
@@ -124,9 +89,6 @@ void colorStream(hls::stream<colorValue>* toStateUpdater,
             bypassWord[OCC_BYPASS-1] = occWord;
             bypassVal[OCC_BYPASS-1] = val;
         }
-#else
-        val = occReadWord(litStore, occCacheTag, litStoreDDR, occWord);
-#endif
 
         if(state == 0){
             if(readOne.eos || stopSendingRead){
@@ -215,12 +177,6 @@ void colorStream(hls::stream<colorValue>* toStateUpdater,
             }
         }
     }
-
-#if defined(OCC_DDR_STREAMED)
-    // Retire the sibling reader. Every loop exit funnels through here, so the
-    // dataflow region can always terminate.
-    occReq.write(OCC_DDR_REQ_SENTINEL);
-#endif
 
     if(type == 0){
         litStoreAccessStats[2] += localAccessStats[2];

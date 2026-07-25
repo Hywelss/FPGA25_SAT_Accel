@@ -505,13 +505,6 @@ void bcp_discover_dataflow_wrapper(clsState clsStates[_FPGA_CLS_STATES_PARTITION
     hls::stream<bcpPacket> toDecide("updateLMDStream");
     #pragma HLS stream variable=toDecide depth=2
 
-#if defined(OCC_DDR_STREAMED)
-    hls::stream<unsigned int> occReq("occDdrReq");
-    #pragma HLS stream variable=occReq depth=4
-    hls::stream<ap_uint<512>> occResp("occDdrResp");
-    #pragma HLS stream variable=occResp depth=4
-#endif
-
     bool skipCPUOnce = false;
     bool flushSignal = false;
     bool firstIterationCopy = firstIteration;
@@ -532,12 +525,7 @@ void bcp_discover_dataflow_wrapper(clsState clsStates[_FPGA_CLS_STATES_PARTITION
         answerStackHeight, decisionLevel, fixedDecisionStackHeight, topLiteral,
         useFlipped, POSITIVE_LIT_PHASE_VAL, skipCPUOnce);
 
-#if defined(OCC_DDR_STREAMED)
-    colorStream(toStateUpdater, toColorStream, &stopSending, litStore, litStoreDDR, occCacheTag, occReq, occResp, LITERAL_PAGE_SIZE, &literalCommit, 0, litStoreAccessStats);
-    occDdrPageReader(occReq, occResp, litStoreDDR);
-#else
     colorStream(toStateUpdater, toColorStream, &stopSending, litStore, litStoreDDR, occCacheTag, LITERAL_PAGE_SIZE, &literalCommit, 0, litStoreAccessStats);
-#endif
 
     updateStatesForward(toControlSinkMUX[0], toStateUpdater[0], clsStates[0], clsStates[1], 0);
     updateStatesForward(toControlSinkMUX[1], toStateUpdater[1], clsStates[2], clsStates[3], 2);
