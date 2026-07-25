@@ -124,15 +124,14 @@
 //RESET MULTIPLIER
 // _HOST_RESET_MULTIPLIER 100
 
-// One BCP round assigns each variable at most once, so a propagation stream can
-// legitimately hold up to _FPGA_MAX_LITERALS entries. The previous quarter-sized
-// bound was a heuristic: bmc-ibm-3 drives a stream to 10,450 entries against a
-// depth of 8,192. Software emulation does not notice, because its streams are
-// unbounded, but in hardware the producer blocks on a full FIFO, and the
-// propagation path (discover -> colorStream -> updateStatesForward ->
-// controlSink -> discover) is a cycle, so backpressure there can wedge the whole
-// round. Size it to the bound instead of a fraction of it.
-const int MAX_STREAM_DEPTH=(_FPGA_MAX_LITERALS);
+// This was briefly raised to _FPGA_MAX_LITERALS on the theory that the board
+// hang came from a full propagation FIFO, after C simulation reported a stream
+// reaching 10,450 entries against this depth. That reading was wrong: C
+// simulation does not run dataflow processes concurrently, so a producer fills
+// its whole output before the consumer starts, and the depth it reports says
+// nothing about what the hardware needs. The real cause was elsewhere, and the
+// four-fold increase cost about 12 MHz in routed frequency, so it is reverted.
+const int MAX_STREAM_DEPTH=(_FPGA_MAX_LITERALS/4);
 // URAM-resident occurrence pages.
 const unsigned int _MAX_PAGES_LIT_STORE_=_FPGA_MAX_LITERAL_ELEMENTS/LIT_SLOTS_PER_WORD;
 // URAM + DDR-overflow occurrence pages. The free-page allocator recycle buffer
