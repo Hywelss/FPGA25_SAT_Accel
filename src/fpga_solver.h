@@ -73,7 +73,7 @@
 // Instances whose occurrence lists fit in URAM never touch DDR (zero
 // regression); only the overflow spills. Define OCC_DDR_TIER to enable; with it
 // off _FPGA_OCC_TOTAL_ELEMENTS == _FPGA_MAX_LITERAL_ELEMENTS, i.e. baseline.
-//#define OCC_DDR_TIER
+#define OCC_DDR_TIER
 #if defined(OCC_DDR_TIER)
   #if defined(FPGA_VCK5000)
     #define _FPGA_OCC_DDR_ELEMENTS (32768 * LIT_SLOTS_PER_WORD)
