@@ -228,12 +228,54 @@ costs at least 32 occurrence elements per variable that appears. The Phase-2
 store therefore capped usable instances near 16,384 variables regardless of the
 32,768-variable literal limit, and Phase 3 unlocks the full range.
 
-On-board capacity check: a 20,000-variable, 40,000-clause instance builds a
-638,544-element occurrence image, 21.8% beyond the Phase-2 store, and solves in
-11.2 ms. Being under-constrained it finishes without conflicts, so it
-demonstrates capacity rather than sustained behaviour under learning and garbage
-collection; an industrial instance above 16,384 variables that does force
-conflict learning is still wanted.
+On-board results: `bmc-ibm-3`, a SATLIB industrial instance of 14,930 variables
+and 72,106 clauses, builds a 538,496-element occurrence image that the Phase-2
+store could not have held, reports `EXCEEDS CACHE`, and solves in 1.18 s under a
+full load -- 60,765 learning iterations, 2,175 backtracks, 13 restarts and real
+garbage collection. `nqueens_32` solves in 61 ms and a 20,000-variable synthetic
+instance, whose 638,544-element image is larger still, in 11 ms. The whole
+`testcases.sh` suite passes, with `marg3x3add8ch` skipped as the expected
+capacity failure: 41 variables but combinatorially brutal, it learns ~198,000
+clauses before exhausting the clause store and reports -4 cleanly.
+
+### Two defects this phase exposed
+
+Both predate the occurrence tier and were found by bisecting the committed
+bitstreams, which is worth doing before assuming a board failure is a
+regression: `git show <commit>:src/bin/workload-hw.xclbin` recovers any earlier
+build, and running the last known-good one against the failing instance settles
+the question in minutes.
+
+`queryClauseStoreCapacity()`, added with the phase-1 pressure-aware prototype,
+sent `csh::STATUS` and then blindly read three replies off the shared clause
+store output stream -- on the conflict path, right after BCP has been cut short.
+`controlSink` keeps forwarding unit clause IDs after a conflict is detected, so
+that stream can still hold length replies nobody consumed; the three reads
+swallow those instead, the real reply stays queued, and every later exchange is
+off by one until the design wedges. On hardware an instance hung if and only if
+it ran at least one query. It is removed: the figures fed telemetry and a
+proactive-GC heuristic, while the literal-page pressure check the solver
+actually needs is local and costs no round trip. A protocol that cannot
+distinguish a reply from a leftover has no safe resynchronisation point.
+
+The phase-2 clause tier then bounded the learned-clause page allocator by the
+`maxClauseElements` argument, which the host fills with
+`_HOST_MAX_CLAUSE_ELEMENTS` -- the size of the DDR arena holding the original
+clauses, eight times the on-chip `mLearnedClsStore` it allocates into. Learning
+past 524,288 elements handed out addresses beyond the array and corrupted
+whatever URAM followed, so only instances that learn heavily ever saw it. The
+allocator is now bounded by the array's own compile-time size. A neighbouring
+off-by-one in the admission check is fixed too: `saveData` takes a fresh page
+whenever its offset reaches `CLAUSE_PAGE_SIZE-1`, including on the last element
+when `numElements` divides evenly, and reads the allocator without testing it
+first, while an empty `mmuStream` returns an uninitialised entry rather than
+failing.
+
+Software emulation cannot reach either defect. It does not pipeline, so
+dependence assertions are satisfied for free, and its kernels are threads with
+unbounded streams, so protocol desynchronisation does not deadlock. Anything
+whose failure mode is concurrency or scheduling has to be reasoned about, not
+simulated, until hardware emulation is available for this platform.
 
 ### Remaining work
 
