@@ -235,8 +235,16 @@ void parseDIMACS(std::string filePath, problemData& pd, const rapidjson::Documen
             index1D++;
         }
 
+        // Short clauses also travel inline in the metadata, so conflict analysis
+        // can read them without touching the DDR arena at all. The arena copy
+        // stays: this is a duplicate, not a relocation.
+        for(unsigned int j = 0; j < CLS_INLINE_LITS; j++){
+            pd.cmd[i].inlineLits[j] =
+                (j < clsStore[i].size() && clsStore[i].size() <= CLS_INLINE_LITS) ? clsStore[i][j] : 0;
+        }
+
         pd.clsStates[i].remainingUnassigned = pd.cmd[i].numElements;
-        pd.clsStates[i].compressedList = xorCompact;  
+        pd.clsStates[i].compressedList = xorCompact;
     }
     if(index1D%16 != 0){
         unsigned int fill = 16-(index1D%16);

@@ -163,7 +163,20 @@ void sendLoop(const ap_uint<512>* originalClauseStore,
     unsigned int reqAddrLit = cmd.addressStart;
     unsigned int processed = 0;
 
-    if(clsID < ORIGINAL_CLS_CNT){
+    if(cmd.numElements <= CLS_INLINE_LITS){
+        // Short clause: its literals travel with the metadata, which is already
+        // on chip, so neither arena is touched. Reason clauses skew short, and
+        // for an original clause this is the difference between a DDR burst and
+        // no memory access at all.
+        SEND_INLINE_DATA: for(unsigned int i = 0; i < CLS_INLINE_LITS; i++){
+            #pragma HLS pipeline II=1
+            if(i < cmd.numElements){
+                ap_axiu<32,0,0,0> sendData;
+                sendData.data = cmd.inlineLits[i];
+                clauseStoreOutputStream.write(sendData);
+            }
+        }
+    }else if(clsID < ORIGINAL_CLS_CNT){
         // Original clauses are 512-bit aligned and dense in device DDR. A
         // burst loader is decoupled from the literal stream unpacker.
         sendOriginalClause(originalClauseStore, cmd, clauseStoreOutputStream);
@@ -240,7 +253,7 @@ void sendData_dataflow(const ap_uint<512>* originalClauseStore1, const ap_uint<5
 void saveData(ap_uint<128> mClsStore[_FPGA_MAX_CLAUSE_ELEMENTS/4],
     mmuStream<unsigned int, _MAX_PAGES_CLS_STORE_>& freeClsPageAddresses,
     const clauseMetaData cmd, const unsigned int CLAUSE_PAGE_SIZE, hls::stream<ap_axiu<96,0,0,0>>& clauseStoreInputStream1,
-    hls::stream<ap_axiu<64,0,0,0>>& locationInputStream){
+    hls::stream<ap_axiu<64,0,0,0>>& locationInputStream, cls inlineLits[CLS_INLINE_LITS]){
     #pragma HLS inline off
 
     unsigned int reqAddrOffsetCls = 0;
@@ -255,6 +268,12 @@ void saveData(ap_uint<128> mClsStore[_FPGA_MAX_CLAUSE_ELEMENTS/4],
 
     for(unsigned int i = 0; i < cmd.numElements; i++){
         ap_axiu<96,0,0,0> getData = clauseStoreInputStream1.read();
+
+        // Keep a copy of the leading literals; the caller stores them in the
+        // metadata when the clause is short enough to be served from there.
+        if(i < CLS_INLINE_LITS){
+            inlineLits[i] = getData.data.range(31,0);
+        }
 
         get.range(32*(reqAddrOffsetCls%4)+31,32*(reqAddrOffsetCls%4)) = getData.data.range(31,0);
 
@@ -642,8 +661,25 @@ void clause_store_handler(ap_uint<512>* originalClauseStore1, ap_uint<512>* orig
 
                 sendData.data = freeID;
                 clauseStoreOutputStream1.write(sendData);
+
+                cls inlineLits[CLS_INLINE_LITS];
+                #pragma HLS array_partition variable=inlineLits complete
+                INIT_INLINE: for(unsigned int i = 0; i < CLS_INLINE_LITS; i++){
+                    #pragma HLS unroll
+                    inlineLits[i] = 0;
+                }
+
                 saveData(mLearnedClsStore, freeClsPageAddresses,
-                    cmd, CLAUSE_PAGE_SIZE, clauseStoreInputStream1, locationInputStream);
+                    cmd, CLAUSE_PAGE_SIZE, clauseStoreInputStream1, locationInputStream, inlineLits);
+
+                if(cmd.numElements <= CLS_INLINE_LITS){
+                    clauseMetaData inlined = cmd;
+                    STORE_INLINE: for(unsigned int i = 0; i < CLS_INLINE_LITS; i++){
+                        #pragma HLS unroll
+                        inlined.inlineLits[i] = inlineLits[i];
+                    }
+                    mCmd[freeID] = inlined;
+                }
             }            
         }else if(code == csh::BUCKET){
             unsigned int lbdLevelIndex = getCommand.data.range(31,0)-2;

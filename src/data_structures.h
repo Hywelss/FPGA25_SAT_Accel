@@ -50,9 +50,23 @@ struct clsStatePCIE{
     int remainingUnassigned;
 };
 
+// Clauses of at most CLS_INLINE_LITS literals carry their literals here, beside
+// the length that is read on every propagation anyway. Conflict analysis is the
+// only thing that reads clause bodies in this design -- BCP works off the XOR
+// signature and counter -- and the clauses it reads are reason clauses, which
+// skew short, because short clauses become unit soonest. Since phase 2 those
+// bodies live in DDR for original clauses, and fetching them is the largest
+// single cost the tier added. Keeping the short ones inline removes the fetch
+// entirely rather than making it cheaper.
+//
+// This is a copy, not a relocation: the clause still occupies the arena, so
+// allocation, page reclamation and the position maps are untouched.
+#define CLS_INLINE_LITS 3
+
 struct clauseMetaData{
     unsigned int addressStart;
     unsigned int numElements;
+    cls inlineLits[CLS_INLINE_LITS];
 };
 
 struct bcpPacket{
