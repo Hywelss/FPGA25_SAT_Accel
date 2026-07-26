@@ -547,7 +547,6 @@ bool solve(std::string xclBinFile, std::string inputFilePath, std::string output
     cl::Buffer clsStoreBuffer;
     cl::Buffer usedClsIDBucketsBuffer;
     cl::Buffer litToClsStorePosBuffer;
-    cl::Buffer clsToLitStorePosBuffer;
     cl::Buffer cmdBuffer;
     cl::Buffer litStoreBuffer;
     cl::Buffer lbdBucketBuffer;
@@ -569,7 +568,6 @@ bool solve(std::string xclBinFile, std::string inputFilePath, std::string output
     // occurrence element, so an update is a single write rather than a
     // read-modify-write of a packed word.
     OCL_CHECK(err, litToClsStorePosBuffer = cl::Buffer(context, CL_MEM_HOST_NO_ACCESS | CL_MEM_READ_WRITE, _FPGA_OCC_TOTAL_ELEMENTS*sizeof(unsigned int), nullptr, &err));
-    OCL_CHECK(err, clsToLitStorePosBuffer = cl::Buffer(context, CL_MEM_HOST_NO_ACCESS | CL_MEM_READ_WRITE, _FPGA_MAX_CLAUSE_ELEMENTS*sizeof(unsigned int), nullptr, &err));
     OCL_CHECK(err, trackLBDCountBuffer = cl::Buffer(context, CL_MEM_USE_HOST_PTR | CL_MEM_READ_WRITE, _FPGA_MAX_LBD_BUCKETS*2*sizeof(unsigned int), trackLBDCount.data(), &err));
    
     OCL_CHECK(err, cmdBuffer = cl::Buffer(context, CL_MEM_USE_HOST_PTR | CL_MEM_READ_WRITE, _FPGA_MAX_CLAUSES * sizeof(clauseMetaData), pd.cmd, &err));
@@ -599,7 +597,6 @@ bool solve(std::string xclBinFile, std::string inputFilePath, std::string output
     OCL_CHECK(err, err = pqHandlerKernel.setArg(1, pd.md.decayFactor));
 
     OCL_CHECK(err, err = storePositionKernel.setArg(0, litToClsStorePosBuffer));
-    OCL_CHECK(err, err = storePositionKernel.setArg(1, clsToLitStorePosBuffer));
 
     argN=0;
     OCL_CHECK(err, err = satSolverKernel.setArg(argN++, clsStatesBuffer));
