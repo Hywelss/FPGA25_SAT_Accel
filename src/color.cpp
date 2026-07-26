@@ -4,7 +4,7 @@ int splitResidualCnt = 0;
 unsigned int checkCnt = 0;
 void colorStream(hls::stream<colorValue>* toStateUpdater,
     hls::stream<colorAssignment>& toColorStream, hls::stream<bool>* stopSending,
-    ap_uint<512> litStore[_FPGA_MAX_LITERAL_ELEMENTS/LIT_SLOTS_PER_WORD], const ap_int<512>* litStoreDDR, occTagEntry* occCacheTag,
+    ap_uint<512> litStore[_FPGA_MAX_LITERAL_ELEMENTS/LIT_SLOTS_PER_WORD], ap_int<512>* litStoreDDR, occTagEntry* occCacheTag,
     const unsigned int LITERAL_PAGE_SIZE,
     lit* literalCommit, const unsigned int type, ap_uint<64>* litStoreAccessStats){
     #pragma HLS inline off
@@ -37,10 +37,9 @@ void colorStream(hls::stream<colorValue>* toStateUpdater,
     // cache arrays for the second one creates a distance-1 read-after-write on a
     // miss and costs an initiation interval (measured II 1 -> 2). Keep the last
     // few (word, value) pairs in registers and answer from them instead, the
-    // same bypass idiom the lmd/clsStates walks already use. Line reuse beyond
-    // this window needs a fresh address that collides in the direct-mapped
-    // index, which a sequential page walk does not produce, so the arrays can be
-    // declared free of cross-iteration dependence.
+    // same bypass idiom the lmd/clsStates walks already use. It is keyed by word
+    // address, so it stays correct even if the line that held that word has
+    // since been evicted; occurrence data does not change during a walk.
     const int OCC_BYPASS = _FPGA_DISC_LMD_DEP_DIST;
     unsigned int bypassWord[_FPGA_DISC_LMD_DEP_DIST];
     #pragma HLS array_partition variable=bypassWord complete

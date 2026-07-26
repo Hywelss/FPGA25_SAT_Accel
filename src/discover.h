@@ -30,7 +30,7 @@ void axiStreamBufferFWD(hls::stream<ap_axiu<32,0,0,0>>& pqHandlerInput, hls::str
 void bcp_discover_dataflow_wrapper(clsState clsStates[_FPGA_CLS_STATES_PARTITION][_FPGA_MAX_CLAUSES/_FPGA_CLS_STATES_PARTITION],
     lit answerStack[_FPGA_MAX_LITERALS], literalMetaData lmd[_FPGA_MAX_LITERALS], literalMinimizeMetaData lmmd[_FPGA_PARALLEL_MINIMIZE][_FPGA_MAX_LITERALS],
     cls unitByCls[_FPGA_MAX_LITERALS],
-    ap_uint<512> litStore[_FPGA_MAX_LITERAL_ELEMENTS/LIT_SLOTS_PER_WORD], const ap_int<512>* litStoreDDR, occTagEntry* occCacheTag,
+    ap_uint<512> litStore[_FPGA_MAX_LITERAL_ELEMENTS/LIT_SLOTS_PER_WORD], ap_int<512>* litStoreDDR, occTagEntry* occCacheTag,
     unsigned int& answerStackHeight,
     myStream<cls,64,7>& unsatClause, unsigned int& fixedDecisionStackHeight, lit& literalCommit, bool& doBackTrack,
     const lit topLiteral, const flippedLiteral litToCheck, const unsigned int fixedDecisionStackHeightCopy,

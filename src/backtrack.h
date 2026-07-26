@@ -16,7 +16,7 @@ void axiStreamBufferBT(hls::stream<ap_axiu<32,0,0,0>>& pqHandlerInput, hls::stre
 void undo_states_dataflow_wrapper(hls::stream<ap_axiu<32,0,0,0>>& pqHandlerInput, 
     clsState clsStates[_FPGA_CLS_STATES_PARTITION][_FPGA_MAX_CLAUSES/_FPGA_CLS_STATES_PARTITION],
     const lit answerStack[_FPGA_MAX_LITERALS], literalMetaData lmd[_FPGA_MAX_LITERALS],
-    ap_uint<512> literalStore[_FPGA_MAX_LITERAL_ELEMENTS/LIT_SLOTS_PER_WORD], const ap_int<512>* litStoreDDR, occTagEntry* occCacheTag,
+    ap_uint<512> literalStore[_FPGA_MAX_LITERAL_ELEMENTS/LIT_SLOTS_PER_WORD], ap_int<512>* litStoreDDR, occTagEntry* occCacheTag,
     const lit literalCommit, const unsigned int backtrackHeight, unsigned int& answerStackHeight,
     const unsigned int LITERAL_PAGE_SIZE, const ap_uint<1> POSITIVE_LIT_PHASE_VAL, ap_uint<64> litStoreAccessStats[4]);
 #endif
