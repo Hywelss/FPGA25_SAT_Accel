@@ -5,10 +5,10 @@
 
 
 extern "C"{
-void location_handler(ap_uint<128>* litToClsStorePos,
+void location_handler(ap_uint<32>* litToClsStorePos,
     hls::stream<ap_axiu<64,0,0,0>>& locationInputStream, hls::stream<ap_axiu<32,0,0,0>>& locationOutputStream){
 
-    #pragma HLS INTERFACE m_axi port=litToClsStorePos offset=slave bundle=gmemLoc latency=64 num_write_outstanding=8 num_read_outstanding=8
+    #pragma HLS INTERFACE m_axi port=litToClsStorePos offset=slave bundle=gmemLoc latency=64 num_write_outstanding=16 num_read_outstanding=16
     #pragma HLS INTERFACE s_axilite port=litToClsStorePos
 	#pragma HLS INTERFACE axis port=locationInputStream
     #pragma HLS INTERFACE axis port=locationOutputStream
@@ -17,13 +17,18 @@ void location_handler(ap_uint<128>* litToClsStorePos,
     ap_uint<128> mClsToLitStorePos[_FPGA_MAX_CLAUSE_ELEMENTS/4];
     #pragma HLS bind_storage variable=mClsToLitStorePos type=RAM_S2P impl=URAM latency=2
 
-    // Occurrence-address-indexed back-reference map. It is touched only while
-    // clauses are being deleted (garbage collection), so it is cold data: an
-    // on-chip array would cost ~57 URAMs and, worse, would have to grow in
-    // lockstep with the occurrence address space, which is what actually caps
-    // occurrence capacity. Keeping it in DDR removes that cap and frees the
-    // URAM for the hot-page cache.
-    ap_uint<128>* mLitToClsStorePos = litToClsStorePos;
+    // Occurrence-address-indexed back-reference map. An on-chip array would cost
+    // ~57 URAMs and, worse, would have to grow in lockstep with the occurrence
+    // address space, which is what actually caps occurrence capacity. Keeping it
+    // in DDR removes that cap and frees the URAM for the hot-page cache.
+    //
+    // Indexed one entry per occurrence element rather than four packed into a
+    // 128-bit word. The packing existed to suit URAM; in DDR it forced a
+    // read-modify-write on every update, purely to preserve the three
+    // neighbouring lanes, which doubled the traffic on the save path and made
+    // each update carry a read-after-write dependency. Flat 32-bit entries make
+    // a save a single write.
+    ap_uint<32>* mLitToClsStorePos = litToClsStorePos;
 
     LOCATION_HANDLE_LOOP: while(true){
         #pragma HLS loop_tripcount min=16 max=16
@@ -69,11 +74,8 @@ void location_handler(ap_uint<128>* litToClsStorePos,
                 getAddr.range(32*(clsToLitAddr%4)+31,32*(clsToLitAddr%4)) = value.data.range(63,32);
                 mClsToLitStorePos[clsToLitAddr/4] = getAddr;
 
-                unsigned int litToClsAddr = value.data.range(63,32);
-                ap_uint<128> getAddr2 = mLitToClsStorePos[litToClsAddr/4];    
-                getAddr2.range(32*(litToClsAddr%4)+31,32*(litToClsAddr%4)) = value.data.range(31,0);
-
-                mLitToClsStorePos[litToClsAddr/4] = getAddr2;
+                const unsigned int litToClsAddr = value.data.range(63,32);
+                mLitToClsStorePos[litToClsAddr] = value.data.range(31,0);
             }
         }else if(code == lh::UPDATE){
             UPDATE_LIT_AND_CLS_STORE_LOCATION: while(true){
@@ -91,12 +93,11 @@ void location_handler(ap_uint<128>* litToClsStorePos,
                 unsigned int swapAddr = value.data.range(31,0);
                 unsigned int replaceAddr = value.data.range(63,32);
 
-                ap_uint<128> getSwap = mLitToClsStorePos[swapAddr/4];
-                ap_uint<128> getReplace = mLitToClsStorePos[replaceAddr/4];
-
-                unsigned int litToClsAddr = getSwap.range(32*(swapAddr%4)+31,32*(swapAddr%4));
-                getReplace.range(32*(replaceAddr%4)+31,32*(replaceAddr%4)) = litToClsAddr;
-                mLitToClsStorePos[replaceAddr/4] = getReplace;
+                // One read and one write. The old packed layout also had to read
+                // the destination word first, only to keep its other three lanes
+                // intact.
+                const unsigned int litToClsAddr = mLitToClsStorePos[swapAddr];
+                mLitToClsStorePos[replaceAddr] = litToClsAddr;
 
                 ap_uint<128> getClsToLitAddrs = mClsToLitStorePos[litToClsAddr/4];
                 getClsToLitAddrs.range(32*(litToClsAddr%4)+31,32*(litToClsAddr%4)) = replaceAddr;

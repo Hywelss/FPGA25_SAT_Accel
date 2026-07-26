@@ -556,8 +556,10 @@ bool solve(std::string xclBinFile, std::string inputFilePath, std::string output
     OCL_CHECK(err, clsStoreBuffer = cl::Buffer(context, CL_MEM_USE_HOST_PTR | CL_MEM_READ_WRITE, _HOST_MAX_CLAUSE_ELEMENTS * sizeof(cls), pd.clauseStore, &err));
     OCL_CHECK(err, usedClsIDBucketsBuffer = cl::Buffer(context, CL_MEM_HOST_NO_ACCESS | CL_MEM_READ_WRITE, _FPGA_MAX_LBD_BUCKETS*_FPGA_MAX_CLAUSES*sizeof(unsigned int), nullptr, &err));
     // Device-only cold tier: occurrence-address -> clause-address back-reference
-    // map, used only during clause deletion. 16 bytes per 4 occurrence elements.
-    OCL_CHECK(err, litToClsStorePosBuffer = cl::Buffer(context, CL_MEM_HOST_NO_ACCESS | CL_MEM_READ_WRITE, (_FPGA_OCC_TOTAL_ELEMENTS/4)*16, nullptr, &err));
+    // map, used only while clauses are saved or deleted. One 32-bit entry per
+    // occurrence element, so an update is a single write rather than a
+    // read-modify-write of a packed word.
+    OCL_CHECK(err, litToClsStorePosBuffer = cl::Buffer(context, CL_MEM_HOST_NO_ACCESS | CL_MEM_READ_WRITE, _FPGA_OCC_TOTAL_ELEMENTS*sizeof(unsigned int), nullptr, &err));
     OCL_CHECK(err, trackLBDCountBuffer = cl::Buffer(context, CL_MEM_USE_HOST_PTR | CL_MEM_READ_WRITE, _FPGA_MAX_LBD_BUCKETS*2*sizeof(unsigned int), trackLBDCount.data(), &err));
    
     OCL_CHECK(err, cmdBuffer = cl::Buffer(context, CL_MEM_USE_HOST_PTR | CL_MEM_READ_WRITE, _FPGA_MAX_CLAUSES * sizeof(clauseMetaData), pd.cmd, &err));
