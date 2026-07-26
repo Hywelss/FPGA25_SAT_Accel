@@ -5,17 +5,24 @@
 
 
 extern "C"{
-void location_handler(ap_uint<32>* litToClsStorePos,
+void location_handler(ap_uint<32>* litToClsStorePos, ap_uint<32>* clsToLitStorePos,
     hls::stream<ap_axiu<64,0,0,0>>& locationInputStream, hls::stream<ap_axiu<32,0,0,0>>& locationOutputStream){
 
     #pragma HLS INTERFACE m_axi port=litToClsStorePos offset=slave bundle=gmemLoc latency=64 num_write_outstanding=16 num_read_outstanding=16
+    #pragma HLS INTERFACE m_axi port=clsToLitStorePos offset=slave bundle=gmemLoc2 latency=64 num_write_outstanding=16 num_read_outstanding=16
     #pragma HLS INTERFACE s_axilite port=litToClsStorePos
+    #pragma HLS INTERFACE s_axilite port=clsToLitStorePos
 	#pragma HLS INTERFACE axis port=locationInputStream
     #pragma HLS INTERFACE axis port=locationOutputStream
 	#pragma HLS INTERFACE s_axilite port=return
 
-    ap_uint<128> mClsToLitStorePos[_FPGA_MAX_CLAUSE_ELEMENTS/4];
-    #pragma HLS bind_storage variable=mClsToLitStorePos type=RAM_S2P impl=URAM latency=2
+    // The companion of the map below, with the same access profile: both are
+    // read and written only while clauses are being saved or deleted. Holding
+    // this one on chip cost ~57 URAMs to serve garbage collection, which is the
+    // rarest thing the solver does, so it belongs in DDR beside the other. Flat
+    // 32-bit entries for the same reason: the 128-bit packing suited URAM and in
+    // DDR only forced a read-modify-write to preserve neighbouring lanes.
+    ap_uint<32>* mClsToLitStorePos = clsToLitStorePos;
 
     // Occurrence-address-indexed back-reference map. An on-chip array would cost
     // ~57 URAMs and, worse, would have to grow in lockstep with the occurrence
@@ -45,14 +52,12 @@ void location_handler(ap_uint<32>* litToClsStorePos,
                 if(value.data == lh::EXIT){
                     break;
                 }
-                unsigned int addr = value.data.range(31,0);
-                ap_uint<128> getAddr = mClsToLitStorePos[addr/4];    
+                const unsigned int addr = value.data.range(31,0);
                 ap_axiu<32,0,0,0> send;
-                send.data = getAddr.range(32*(addr%4)+31,32*(addr%4));
+                send.data = mClsToLitStorePos[addr];
                 locationOutputStream.write(send);
             }
         }else if(code == lh::SAVE){
-            ap_uint<128> getAddr = 0;
             SET_LIT_AND_CLS_STORE_LOCATION: while(true){
                 #pragma HLS loop_tripcount min=16 max=16
                 // No independence assertion: this loop read-modify-writes
@@ -67,12 +72,8 @@ void location_handler(ap_uint<32>* litToClsStorePos,
                     break;
                 }
 
-                unsigned int clsToLitAddr = value.data.range(31,0);    
-                if(clsToLitAddr%4 == 0){
-                    getAddr = 0;
-                }
-                getAddr.range(32*(clsToLitAddr%4)+31,32*(clsToLitAddr%4)) = value.data.range(63,32);
-                mClsToLitStorePos[clsToLitAddr/4] = getAddr;
+                const unsigned int clsToLitAddr = value.data.range(31,0);
+                mClsToLitStorePos[clsToLitAddr] = value.data.range(63,32);
 
                 const unsigned int litToClsAddr = value.data.range(63,32);
                 mLitToClsStorePos[litToClsAddr] = value.data.range(31,0);
@@ -99,9 +100,7 @@ void location_handler(ap_uint<32>* litToClsStorePos,
                 const unsigned int litToClsAddr = mLitToClsStorePos[swapAddr];
                 mLitToClsStorePos[replaceAddr] = litToClsAddr;
 
-                ap_uint<128> getClsToLitAddrs = mClsToLitStorePos[litToClsAddr/4];
-                getClsToLitAddrs.range(32*(litToClsAddr%4)+31,32*(litToClsAddr%4)) = replaceAddr;
-                mClsToLitStorePos[litToClsAddr/4] = getClsToLitAddrs;
+                mClsToLitStorePos[litToClsAddr] = replaceAddr;
             }
         }
     }
