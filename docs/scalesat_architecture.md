@@ -210,9 +210,9 @@ same code.
 
 ### Phase-3 results
 
-The routed VCK5000 design meets timing at the nominal 220 MHz target with
-WNS -0.023 ns and no hold violations, and uses 336 of 463 URAMs (72.6%):
-location_handler 64, clause_store_handler 124, solver 148.
+The routed VCK5000 design has WNS -0.163 ns against the nominal 220 MHz target
+and no hold violations, so Vitis selects roughly 212 MHz, and it uses 336 of 463
+URAMs (72.6%): solver 148, clause_store_handler 124, location_handler 64.
 
 | | Phase 2 baseline | Phase 3 |
 |---|---|---|
@@ -220,7 +220,25 @@ location_handler 64, clause_store_handler 124, solver 148.
 | Usable variables | ~16,384 | 32,768 |
 | URAM | 414/463 (89.4%) | 336/463 (72.6%) |
 | BCP initiation interval | 1 | 1 |
-| Routed WNS | -0.160 ns | -0.023 ns |
+| Routed WNS | -0.160 ns | -0.163 ns |
+
+Timing is therefore level with the baseline while capacity doubles and 78 URAMs
+come free. Holding the initiation interval at 1 needed two results that are easy
+to get backwards. HLS reserves the *declared* m_axi latency on every iteration
+of a pipelined loop, so a large declared latency on the occurrence port inflated
+the walk to II=24 whether or not a miss occurred. And because a 16-slot page word
+feeds two consecutive 8-slot iterations, a cache fill creates a distance-1
+read-after-write on the line the next iteration reads, which costs II=2 by
+itself; a small register window of recent (word, value) pairs answers the repeat
+access without going back to the arrays.
+
+What that register window must not be confused with is an independence
+assertion. Four loops carried `#pragma HLS dependence variable=litStore inter
+false`, sound while litStore was indexed directly by word address and unsound
+the moment it became a cache, since occLine() aliases many words onto one line
+and two iterations on unrelated pages can collide. Introducing a cache changes
+the aliasing behaviour of the array, so every dependence assertion on it has to
+be re-derived rather than inherited.
 
 The variable figure follows from the page layout: each variable keeps a positive
 and a negative occurrence list, each padded to a 16-element page, so an instance

@@ -195,16 +195,25 @@ Phase-3 verification on VCK5000 (Vitis/XRT 2022.2):
   `EXTRA_DEFINES=-DOCC_CACHE_STRESS`, which shrinks the cache to 64 lines so the
   small instances are forced through the miss, eviction, write-through and
   cross-tier walk paths while returning identical answers;
-- the BCP walk holds II=1; the routed design meets the nominal 220 MHz target
-  with WNS -0.023 ns and uses 336/463 URAMs (72.6%), against 414 in phase 2;
-- an on-board 20,000-variable instance builds a 638,544-element occurrence image
-  -- beyond the phase-2 store -- and solves in 11.2 ms.
+- the BCP walk holds II=1; the routed design has WNS -0.163 ns against the
+  nominal 220 MHz target, level with the phase-2 baseline's -0.160 ns, and uses
+  336/463 URAMs (72.6%) against 414 in phase 2;
+- `bmc-ibm-3` (SATLIB industrial, 14,930 variables) builds a 538,496-element
+  occurrence image the phase-2 store could not have held, reports
+  `EXCEEDS CACHE`, and solves on the board in 1.18 s under a full load: 60,765
+  learning iterations, 2,175 backtracks, 13 restarts and real garbage
+  collection;
+- `nqueens_32` solves in 61 ms, a 20,000-variable synthetic instance whose
+  638,544-element image is larger still in 11 ms, and the whole `testcases.sh`
+  suite passes.
 
-Being under-constrained, that instance finishes without conflicts, so it
-demonstrates capacity rather than sustained behaviour under learning and
-garbage collection. An industrial instance above 16,384 variables that does
-force conflict learning is still wanted, as are the `randomG-B-Mix-n15-d05` and
-`sp5-26-19-bin-nons-tree-noid` runs.
+Two defects that predate the tier surfaced during this work and are fixed: the
+phase-1 `csh::STATUS` query, whose blind three-word reply desynchronised the
+clause-store streams on the conflict path and hung the board, and the phase-2
+learned-clause allocator, bounded by the DDR arena's size rather than the
+on-chip array it allocates into. See `docs/scalesat_architecture.md`.
+
+`randomG-B-Mix-n15-d05` and `sp5-26-19-bin-nons-tree-noid` remain untried.
 
 To reproduce the successful run from the repository root:
 
