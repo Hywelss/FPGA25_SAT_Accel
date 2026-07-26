@@ -134,6 +134,10 @@ access pattern before it reaches that interface.
 
 ## Phase 3: occurrence hot/cold tier
 
+A chronological account of this phase -- the requirements it was built to,
+the routes that were tried and abandoned, and the methodology lessons -- is
+kept in Chinese in [`scalesat_worklog_zh.md`](scalesat_worklog_zh.md).
+
 Phase 2 left the URAM occurrence store as the capacity wall. Phase 3 removes it
 by making DDR authoritative for the whole occurrence table and turning the
 on-chip array into a direct-mapped cache of 512-bit page words.
