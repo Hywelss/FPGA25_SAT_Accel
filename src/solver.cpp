@@ -146,18 +146,10 @@ void solver(clsStatePCIE* clsStates, ap_int<512>* litStore, lit* answerStack,
     lit mAnswerStack[_FPGA_MAX_LITERALS];
     #pragma HLS bind_storage variable=mAnswerStack type=RAM_S2P impl=BRAM latency=1
 
-    // Hot tier: direct-mapped cache of occurrence page words. DDR holds the
-    // authoritative table, so residency now tracks actual access instead of
-    // allocation order.
+    // On-chip occurrence pages. Authoritative for word addresses below
+    // _MAX_PAGES_LIT_STORE_; the rest live in the DDR arena.
     ap_uint<512> mLitStore[_FPGA_MAX_LITERAL_ELEMENTS/LIT_SLOTS_PER_WORD];
     #pragma HLS bind_storage variable=mLitStore type=RAM_S2P impl=URAM latency=1
-
-    occTagEntry mOccCacheTag[OCC_CACHE_LINES];
-    #pragma HLS bind_storage variable=mOccCacheTag type=RAM_S2P impl=BRAM latency=1
-    INIT_OCC_CACHE_TAGS: for(unsigned int i = 0; i < OCC_CACHE_LINES; i++){
-        #pragma HLS pipeline II=1
-        mOccCacheTag[i] = 0;   // invalid
-    }
 
     literalMetaData mlmd[_FPGA_MAX_LITERALS];
     #pragma HLS aggregate variable=mlmd compact=auto
@@ -300,7 +292,7 @@ void solver(clsStatePCIE* clsStates, ap_int<512>* litStore, lit* answerStack,
 
             bcp_discover_dataflow_wrapper(mClsStates,
                 mAnswerStack, mlmd, mlmmd, unitByCls,
-                mLitStore, litStore, mOccCacheTag,
+                mLitStore, litStore,
                 answerStackHeight, unsatClauses, fixedDecisionStackHeight, literalCommit, doBackTrack,
                 topLiteral, litToCheck, fixedDecisionStackHeight, decisionLevel, useFlipped, firstIteration, 
                 LITERAL_PAGE_SIZE, POSITIVE_LIT_PHASE_VAL,
@@ -466,7 +458,7 @@ void solver(clsStatePCIE* clsStates, ap_int<512>* litStore, lit* answerStack,
             int givenClsID;
 
             learnClause(mClsStates,
-                mLitStore, litStore, mOccCacheTag,
+                mLitStore, litStore,
                 mlmd, mlmmd, insertPropagate, freeLitPageAddresses,
                 decisionLevel, givenClsID,
                 mAnswerStack, unitByCls, literalCommit, answerStackHeight,
@@ -530,7 +522,7 @@ void solver(clsStatePCIE* clsStates, ap_int<512>* litStore, lit* answerStack,
 
                 clauseStoreInputStream1.write(sendClauseInputCommand);
 
-                deleteTransposedClauses(mLitStore, litStore, mOccCacheTag,
+                deleteTransposedClauses(mLitStore, litStore,
                     mlmd, freeLitPageAddresses, LITERAL_PAGE_SIZE, 
                     clauseStoreInputStream1, clauseStoreOutputStream1, locationOutputStream);
 

@@ -459,7 +459,7 @@ void controlSink(hls::stream<bcpPacket>& toDecide,
 void bcp_discover_dataflow_wrapper(clsState clsStates[_FPGA_CLS_STATES_PARTITION][_FPGA_MAX_CLAUSES/_FPGA_CLS_STATES_PARTITION],
     lit answerStack[_FPGA_MAX_LITERALS], literalMetaData lmd[_FPGA_MAX_LITERALS], literalMinimizeMetaData lmmd[_FPGA_PARALLEL_MINIMIZE][_FPGA_MAX_LITERALS],
     cls unitByCls[_FPGA_MAX_LITERALS],
-    ap_uint<512> litStore[_FPGA_MAX_LITERAL_ELEMENTS/LIT_SLOTS_PER_WORD], const ap_int<512>* litStoreDDR, occTagEntry* occCacheTag,
+    ap_uint<512> litStore[_FPGA_MAX_LITERAL_ELEMENTS/LIT_SLOTS_PER_WORD], const ap_int<512>* litStoreDDR,
     unsigned int& answerStackHeight,
     myStream<cls,64,7>& unsatClauses, unsigned int& fixedDecisionStackHeight, lit& literalCommit, bool& doBackTrack,
     const lit topLiteral, const flippedLiteral litToCheck, const unsigned int fixedDecisionStackHeightCopy,
@@ -525,7 +525,7 @@ void bcp_discover_dataflow_wrapper(clsState clsStates[_FPGA_CLS_STATES_PARTITION
         answerStackHeight, decisionLevel, fixedDecisionStackHeight, topLiteral,
         useFlipped, POSITIVE_LIT_PHASE_VAL, skipCPUOnce);
 
-    colorStream(toStateUpdater, toColorStream, &stopSending, litStore, litStoreDDR, occCacheTag, LITERAL_PAGE_SIZE, &literalCommit, 0, litStoreAccessStats);
+    colorStream(toStateUpdater, toColorStream, &stopSending, litStore, litStoreDDR, LITERAL_PAGE_SIZE, &literalCommit, 0, litStoreAccessStats);
 
     updateStatesForward(toControlSinkMUX[0], toStateUpdater[0], clsStates[0], clsStates[1], 0);
     updateStatesForward(toControlSinkMUX[1], toStateUpdater[1], clsStates[2], clsStates[3], 2);

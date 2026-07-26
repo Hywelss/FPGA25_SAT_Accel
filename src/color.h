@@ -16,7 +16,7 @@
 // for both is the point here: what sw_emu runs is what the board runs.
 void colorStream(hls::stream<colorValue>* toStateUpdater,
     hls::stream<colorAssignment>& toColorStream, hls::stream<bool>* stopSending,
-    ap_uint<512> litStore[_FPGA_MAX_LITERAL_ELEMENTS/LIT_SLOTS_PER_WORD], const ap_int<512>* litStoreDDR, occTagEntry* occCacheTag,
+    ap_uint<512> litStore[_FPGA_MAX_LITERAL_ELEMENTS/LIT_SLOTS_PER_WORD], const ap_int<512>* litStoreDDR,
     const unsigned int LITERAL_PAGE_SIZE,
     lit* literalCommit, const unsigned int type, ap_uint<64>* litStoreAccessStats);
 

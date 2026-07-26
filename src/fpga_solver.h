@@ -140,63 +140,36 @@ const unsigned int _MAX_PAGES_LIT_STORE_=_FPGA_MAX_LITERAL_ELEMENTS/LIT_SLOTS_PE
 const unsigned int _MAX_PAGES_LIT_STORE_TOTAL_=_FPGA_OCC_TOTAL_ELEMENTS/LIT_SLOTS_PER_WORD;
 const unsigned int _MAX_PAGES_CLS_STORE_=_FPGA_MAX_CLAUSE_ELEMENTS/4;
 
-// ---- Occurrence hot/cold tier ----------------------------------------------
-// DDR (the reused litStore buffer) holds the authoritative occurrence table;
-// the on-chip array is a direct-mapped cache of 512-bit page words. Residency
-// therefore follows actual access -- a page that BCP keeps walking stays hot in
-// URAM, one that is never touched drifts out -- instead of being decided by the
-// accident of allocation order. Element addresses never change, so lmd and the
-// back-reference map are untouched by promotion/eviction.
+// ---- Occurrence tier access ------------------------------------------------
+// The tier is encoded in the address: words below _MAX_PAGES_LIT_STORE_ live in
+// the on-chip array, which is authoritative for them, and the rest live in the
+// DDR arena at the same global word index.
 //
-// Cache line == one page word, which is exactly the granularity colorStream
-// walks; the two 8-slot chunk reads of a 16-slot page make the second access a
-// guaranteed hit.
-// Same on-chip array size as before (power of two, so the index is a mask).
-#define OCC_CACHE_LINES   _MAX_PAGES_LIT_STORE_
-#define OCC_TAG_BITS      16
-// [valid][tag]
-typedef ap_uint<OCC_TAG_BITS+1> occTagEntry;
-
-static inline unsigned int occLine(unsigned int w){
+// This replaced a direct-mapped cache with tags. The cache decided residency by
+// access, which is the right policy, but it charged for that decision on every
+// single access: a tag read, a compare, then the data read, where the array had
+// previously been one direct index. Measured on the board, the BCP phase cost
+// 4x the pre-tier cycles even on an instance whose occurrence image is a
+// quarter of the cache and essentially never misses -- the tax is paid on hits.
+// Writes were worse: with DDR authoritative every write went off chip, and
+// making it write-back instead cost more than it saved, because letting the read
+// path flush a victim turns the read port into a read-write master and
+// serialises every read behind it.
+//
+// An address compare is combinational and free, and it leaves the on-chip
+// region authoritative, so resident pages are read and written entirely on chip.
+// Deciding *which* pages are resident is then a placement question, to be
+// answered where it costs nothing: garbage collection already rewrites
+// occurrence lists and updates their addresses, so it can relocate them by
+// activity at the same time. Policy belongs at that boundary, not on the
+// critical path of every propagation.
+static inline ap_uint<512> occReadWord(const ap_uint<512>* uram, const ap_int<512>* ddr, unsigned int w){
     #pragma HLS inline
-    return w & (OCC_CACHE_LINES-1);
+    return (w < _MAX_PAGES_LIT_STORE_) ? uram[w] : (ap_uint<512>)ddr[w];
 }
-static inline occTagEntry occTagOf(unsigned int w){
+static inline void occWriteWord(ap_uint<512>* uram, ap_int<512>* ddr, unsigned int w, ap_uint<512> v){
     #pragma HLS inline
-    occTagEntry t = w / OCC_CACHE_LINES;
-    t.range(OCC_TAG_BITS,OCC_TAG_BITS) = 1;   // valid
-    return t;
+    if(w < _MAX_PAGES_LIT_STORE_) uram[w] = v;
+    else ddr[w] = (ap_int<512>)v;
 }
-
-// Read/write outside the BCP hot loop (clause learning, page allocation,
-// delete-time compaction): a miss loads straight from DDR. Writes are
-// write-through and refresh the line, so the cache never goes stale.
-static inline ap_uint<512> occReadWord(ap_uint<512>* cacheData, occTagEntry* cacheTag,
-    const ap_int<512>* ddr, unsigned int w){
-    #pragma HLS inline
-    const unsigned int L = occLine(w);
-    const occTagEntry T = occTagOf(w);
-    if(cacheTag[L] == T){
-        return cacheData[L];
-    }
-    const ap_uint<512> v = (ap_uint<512>)ddr[w];
-    cacheData[L] = v;
-    cacheTag[L] = T;
-    return v;
-}
-static inline void occWriteWord(ap_uint<512>* cacheData, occTagEntry* cacheTag,
-    ap_int<512>* ddr, unsigned int w, ap_uint<512> v){
-    #pragma HLS inline
-    ddr[w] = (ap_int<512>)v;
-    cacheData[occLine(w)] = v;
-    cacheTag[occLine(w)] = occTagOf(w);
-}
-
-extern int spentRemoving;
-extern int overhead;
-extern int splitResidualCnt;
-extern unsigned int checkCnt;
-
-void sendTime(hls::stream<ap_axiu<64,0,0,0>>& timerValueStream, hls::stream<ap_axiu<1,0,0,0>>& conditionStream, 
-    const unsigned int code, volatile uint64_t* store);
 #endif

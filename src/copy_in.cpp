@@ -75,9 +75,10 @@ void copy_in_dataflow_wrapper(clsState mClsStates[_FPGA_CLS_STATES_PARTITION][_F
     store[1]++;
 
     copy_clsStates(mClsStates, clsStates, numClauses);
-    // The occurrence table is authoritative in DDR and the on-chip array is now
-    // a demand-filled cache (tags start invalid), so staging a prefix here would
-    // only be refetched. Left out deliberately.
+    // The on-chip array is authoritative for the addresses it covers, so the
+    // resident part of the occurrence image has to be staged here. copy_litStore
+    // clamps to that region; anything past it stays in DDR and is read in place.
+    copy_litStore(mLitStore, litStore1, literalElements);
     copy_lmd(mlmd, mlmmd, lmd, NUM_LITERALS);
     copy_answerStack(mAnswerStack, answerStack, NUM_LITERALS);
     
