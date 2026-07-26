@@ -154,10 +154,8 @@ const unsigned int _MAX_PAGES_CLS_STORE_=_FPGA_MAX_CLAUSE_ELEMENTS/4;
 // Same on-chip array size as before (power of two, so the index is a mask).
 #define OCC_CACHE_LINES   _MAX_PAGES_LIT_STORE_
 #define OCC_TAG_BITS      16
-// [dirty][valid][tag]
-typedef ap_uint<OCC_TAG_BITS+2> occTagEntry;
-#define OCC_TAG_VALID     (OCC_TAG_BITS)
-#define OCC_TAG_DIRTY     (OCC_TAG_BITS+1)
+// [valid][tag]
+typedef ap_uint<OCC_TAG_BITS+1> occTagEntry;
 
 static inline unsigned int occLine(unsigned int w){
     #pragma HLS inline
@@ -166,46 +164,20 @@ static inline unsigned int occLine(unsigned int w){
 static inline occTagEntry occTagOf(unsigned int w){
     #pragma HLS inline
     occTagEntry t = w / OCC_CACHE_LINES;
-    t.range(OCC_TAG_VALID,OCC_TAG_VALID) = 1;
+    t.range(OCC_TAG_BITS,OCC_TAG_BITS) = 1;   // valid
     return t;
 }
-// Which word a resident line holds: tag * OCC_CACHE_LINES + line index, the
-// inverse of the split above. Needed to know where to flush a dirty victim.
-static inline unsigned int occWordOf(occTagEntry t, unsigned int L){
-    #pragma HLS inline
-    return ((unsigned int)t.range(OCC_TAG_BITS-1,0)) * OCC_CACHE_LINES + L;
-}
-// Valid and tag must match; the dirty bit is not part of the identity.
-static inline bool occHit(occTagEntry cur, occTagEntry want){
-    #pragma HLS inline
-    return cur.range(OCC_TAG_VALID,0) == want.range(OCC_TAG_VALID,0);
-}
-static inline bool occNeedsFlush(occTagEntry cur){
-    #pragma HLS inline
-    return cur.range(OCC_TAG_VALID,OCC_TAG_VALID) == 1 &&
-           cur.range(OCC_TAG_DIRTY,OCC_TAG_DIRTY) == 1;
-}
 
-// The cache is write-back. Write-through cost far more than expected: every
-// occurrence write took a DDR round trip even when the page was resident, and
-// the clause-save phase measured 150x the pre-tier cycle count on an instance
-// whose occurrence image fits the cache several times over. Under write-back an
-// instance that fits issues essentially no DDR writes at all.
-//
-// Writes always replace a whole 512-bit word -- every caller reads a word,
-// edits one slot and writes the word back -- so a write miss can install the
-// line without fetching it first.
+// Read/write outside the BCP hot loop (clause learning, page allocation,
+// delete-time compaction): a miss loads straight from DDR. Writes are
+// write-through and refresh the line, so the cache never goes stale.
 static inline ap_uint<512> occReadWord(ap_uint<512>* cacheData, occTagEntry* cacheTag,
-    ap_int<512>* ddr, unsigned int w){
+    const ap_int<512>* ddr, unsigned int w){
     #pragma HLS inline
     const unsigned int L = occLine(w);
     const occTagEntry T = occTagOf(w);
-    const occTagEntry cur = cacheTag[L];
-    if(occHit(cur,T)){
+    if(cacheTag[L] == T){
         return cacheData[L];
-    }
-    if(occNeedsFlush(cur)){
-        ddr[occWordOf(cur,L)] = (ap_int<512>)cacheData[L];
     }
     const ap_uint<512> v = (ap_uint<512>)ddr[w];
     cacheData[L] = v;
@@ -215,15 +187,9 @@ static inline ap_uint<512> occReadWord(ap_uint<512>* cacheData, occTagEntry* cac
 static inline void occWriteWord(ap_uint<512>* cacheData, occTagEntry* cacheTag,
     ap_int<512>* ddr, unsigned int w, ap_uint<512> v){
     #pragma HLS inline
-    const unsigned int L = occLine(w);
-    occTagEntry T = occTagOf(w);
-    const occTagEntry cur = cacheTag[L];
-    if(!occHit(cur,T) && occNeedsFlush(cur)){
-        ddr[occWordOf(cur,L)] = (ap_int<512>)cacheData[L];
-    }
-    cacheData[L] = v;
-    T.range(OCC_TAG_DIRTY,OCC_TAG_DIRTY) = 1;
-    cacheTag[L] = T;
+    ddr[w] = (ap_int<512>)v;
+    cacheData[occLine(w)] = v;
+    cacheTag[occLine(w)] = occTagOf(w);
 }
 
 extern int spentRemoving;
