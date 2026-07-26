@@ -172,4 +172,12 @@ static inline void occWriteWord(ap_uint<512>* uram, ap_int<512>* ddr, unsigned i
     if(w < _MAX_PAGES_LIT_STORE_) uram[w] = v;
     else ddr[w] = (ap_int<512>)v;
 }
+
+extern int spentRemoving;
+extern int overhead;
+extern int splitResidualCnt;
+extern unsigned int checkCnt;
+
+void sendTime(hls::stream<ap_axiu<64,0,0,0>>& timerValueStream, hls::stream<ap_axiu<1,0,0,0>>& conditionStream,
+    const unsigned int code, volatile uint64_t* store);
 #endif

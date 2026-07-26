@@ -636,6 +636,13 @@ void clause_store_handler(ap_uint<512>* originalClauseStore1, ap_uint<512>* orig
         }else if(code == csh::SAVE){
             clauseMetaData cmd;
             cmd.numElements = getCommand.data.range(31,0);
+            // The entry is stored before the body arrives, so clear the inline
+            // copy rather than publishing uninitialised literals. It is filled
+            // in below once saveData has seen the clause.
+            CLEAR_INLINE: for(unsigned int i = 0; i < CLS_INLINE_LITS; i++){
+                #pragma HLS unroll
+                cmd.inlineLits[i] = 0;
+            }
 
             ap_axiu<32,0,0,0> sendData;
             // Reserve one spare page. saveData below takes a fresh page every
