@@ -1,20 +1,35 @@
 #!/usr/bin/env python3
 """Select a SAT-Accel-compatible evaluation set from the Global Benchmark Database.
 
-Applies the three hard capacity constraints of the VCK5000 build plus a
-difficulty floor, then reports whether the surviving set is large and diverse
-enough to evaluate a branching heuristic on.
+Applies the hard capacity constraints of the VCK5000 build, then reports
+whether the surviving set is large and diverse enough to evaluate a branching
+heuristic on.
 
-Dependency-free: standard library only.  GBD's databases are plain SQLite, so
-gbd-tools is not needed.  Large files go under --data-root (default
-/mnt/data/satbench).
+Dependency-free: standard library only.
+
+How GBD actually behaves, as measured rather than assumed:
+
+  * /getdatabase/<anything>.db returns the same 30 MB meta.db (verified by md5),
+    so base.db and friends are not separately available.
+  * meta.db holds one wide "features" table with family, result, filename,
+    track and minisat1m -- but no instance sizes.  Its track column defaults to
+    the instance hash and is unusable.
+  * variables and clauses live server side and are reachable only through the
+    /getinstances query endpoint.  Exactly six features are accepted there
+    (see SERVER_FEATURES); every other name returns HTTP 500.
+  * No runtime feature is queryable and no total-literal feature exists, so
+    difficulty has to be measured after download, and the literal budget has to
+    be counted from the CNFs.
+
+So: filter sizes on the server, join the returned hashes against a local
+meta.db for family and result, and count literals locally.
 
 Stages
 ------
-  schema   dump the SQLite schema of the downloaded databases (diagnostic)
-  query    filter GBD, write candidates.csv          (no CNF downloads, seconds)
-  fetch    download candidate CNFs                   (bulk, resumable)
-  verify   stream-count literals, apply constraint C, write evalset.csv
+  schema   dump meta.db's schema and probe the server features (diagnostic)
+  query    filter GBD, write candidates.csv        (no CNF downloads, seconds)
+  fetch    download candidate CNFs                 (resumable, ~0.08 MB each)
+  verify   stream-count literals, apply the literal budget, write evalset.csv
   all      query + fetch + verify
 
 Usage
@@ -32,6 +47,8 @@ import os
 import re
 import sqlite3
 import sys
+import urllib.error
+import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -53,11 +70,15 @@ IMMUNE_PATTERNS = [
     "xor",                             # xor chains
 ]
 
-DB_URLS = {
-    "meta.db": "https://benchmark-database.de/getdatabase/meta.db",
-    "base.db": "https://benchmark-database.de/getdatabase/base.db",
-}
+DB_URL = "https://benchmark-database.de/getdatabase/meta.db"
 FILE_URL = "https://benchmark-database.de/file/{hash}?context=cnf"
+QUERY_URL = "https://benchmark-database.de/getinstances"
+
+# Confirmed queryable server side; everything else returns HTTP 500.
+SERVER_FEATURES = ("variables", "clauses", "result", "family", "track", "minisat1m")
+
+# Columns read from meta.db's features table, when present.
+META_COLUMNS = ("hash", "family", "result", "filename", "minisat1m")
 
 # Fixed in advance so the outcome is not rationalised after the fact.
 VERDICT_GO_INSTANCES, VERDICT_GO_FAMILIES = 30, 6
@@ -71,14 +92,6 @@ def log(msg=""):
 def is_immune(*fields):
     blob = " ".join(str(f) for f in fields if f).lower()
     return any(p in blob for p in IMMUNE_PATTERNS)
-
-
-def as_float(v):
-    try:
-        f = float(v)
-        return f if f == f else None      # reject NaN
-    except (TypeError, ValueError):
-        return None
 
 
 # ------------------------------------------------------------------ downloads
@@ -96,196 +109,162 @@ def download(url, dest, desc=None):
             f.write(chunk)
     os.replace(tmp, dest)
     if desc:
-        log(f"  fetched {desc} ({os.path.getsize(dest)/1e6:.1f} MB)")
+        log("  fetched {} ({:.1f} MB)".format(desc, os.path.getsize(dest) / 1e6))
     return True
 
 
-def ensure_dbs(data_root):
-    paths = []
-    for name, url in DB_URLS.items():
-        dest = os.path.join(data_root, "gbd", name)
-        if not os.path.exists(dest):
-            log(f"[db] downloading {name}")
-        download(url, dest, desc=name)
-        paths.append(dest)
-    return paths
+def ensure_db(data_root):
+    dest = os.path.join(data_root, "gbd", "meta.db")
+    if not os.path.exists(dest):
+        log("[db] downloading meta.db")
+    download(DB_URL, dest, desc="meta.db")
+    return dest
 
 
-# --------------------------------------------------------------- sqlite access
+# -------------------------------------------------------------- meta.db + API
 
-def connect(paths):
-    conn = sqlite3.connect(":memory:")
-    for i, p in enumerate(paths):
-        conn.execute("ATTACH DATABASE ? AS ?", (p, f"db{i}"))
-    return conn
-
-
-def list_feature_tables(conn, n_dbs):
-    """Return {feature_name: (schema, hash_col, value_col)} for GBD feature tables.
-
-    A GBD feature is stored as its own table with a hash column and a value
-    column.  Names are discovered rather than assumed, so a schema change shows
-    up as a missing feature instead of a wrong answer.
-    """
-    found = {}
-    for i in range(n_dbs):
-        schema = f"db{i}"
-        try:
-            tables = conn.execute(
-                f"SELECT name FROM {schema}.sqlite_master "
-                "WHERE type IN ('table','view')").fetchall()
-        except sqlite3.Error:
-            continue
-        for (t,) in tables:
-            try:
-                cols = [r[1] for r in conn.execute(
-                    f'PRAGMA {schema}.table_info("{t}")').fetchall()]
-            except sqlite3.Error:
-                continue
-            low = [c.lower() for c in cols]
-            if "hash" not in low:
-                continue
-            hcol = cols[low.index("hash")]
-            vcol = None
-            for cand in ("value", t):
-                if cand.lower() in low:
-                    vcol = cols[low.index(cand.lower())]
-                    break
-            if vcol is None:
-                others = [c for c in cols if c.lower() != "hash"]
-                if len(others) == 1:
-                    vcol = others[0]
-            if vcol is not None and t not in found:
-                found[t] = (schema, hcol, vcol)
-    return found
-
-
-def read_feature(conn, feat, spec):
-    schema, hcol, vcol = spec
+def read_meta(path):
+    """Return {hash: {column: value}} from meta.db's wide features table."""
+    conn = sqlite3.connect(path)
+    cols = [r[1] for r in conn.execute('PRAGMA table_info("features")')]
+    if not cols:
+        log('ERROR: meta.db has no "features" table.  Run --stage schema.')
+        sys.exit(1)
+    use = [c for c in META_COLUMNS if c in cols]
+    if "hash" not in use:
+        log("ERROR: features table has no hash column.  Columns: {}".format(cols))
+        sys.exit(1)
+    sel = ", ".join('"{}"'.format(c) for c in use)
     out = {}
-    for h, v in conn.execute(
-            f'SELECT "{hcol}", "{vcol}" FROM {schema}."{feat}"'):
-        if h is not None and h not in out:
-            out[h] = v
+    for row in conn.execute("SELECT {} FROM features".format(sel)):
+        d = dict(zip(use, row))
+        out[d["hash"]] = d
+    log("[meta] {} instances, columns: {}".format(len(out), ", ".join(use)))
     return out
 
 
+def server_query(expr, timeout=900):
+    """Run a GBD query server side; return the list of instance hashes."""
+    url = QUERY_URL + "?" + urllib.parse.urlencode({"query": expr, "context": "cnf"})
+    try:
+        body = urllib.request.urlopen(url, timeout=timeout).read().decode("utf8", "replace")
+    except urllib.error.HTTPError as e:
+        log("ERROR: server rejected the query (HTTP {}).".format(e.code))
+        log("       query: {}".format(expr))
+        log("       queryable features: {}".format(", ".join(SERVER_FEATURES)))
+        sys.exit(1)
+    return [l.rsplit("/", 1)[-1].strip() for l in body.splitlines() if l.startswith("http")]
+
+
 def stage_schema(args):
-    paths = ensure_dbs(args.data_root)
-    conn = connect(paths)
-    feats = list_feature_tables(conn, len(paths))
-    log(f"[schema] {len(feats)} feature tables across {len(paths)} databases\n")
-    for name in sorted(feats):
-        schema, hcol, vcol = feats[name]
+    path = ensure_db(args.data_root)
+    conn = sqlite3.connect(path)
+    log("[schema] {}".format(path))
+    log("")
+    for (name,) in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type IN ('table','view') ORDER BY name"):
         try:
-            n = conn.execute(f'SELECT COUNT(*) FROM {schema}."{name}"').fetchone()[0]
+            n = conn.execute('SELECT COUNT(*) FROM "{}"'.format(name)).fetchone()[0]
         except sqlite3.Error:
             n = -1
-        log(f"  {name:<38} rows={n:<9} ({schema}: {hcol}, {vcol})")
-    log("\n[schema] runtime-like features:")
-    for name in sorted(feats):
-        if "runtime" in name.lower() or "solver" in name.lower():
-            log(f"    {name}")
+        cols = [r[1] for r in conn.execute('PRAGMA table_info("{}")'.format(name))]
+        log("  {:<20} rows={:<9} cols={}".format(name, n, cols))
+    log("")
+    log("[schema] probing which features the server accepts:")
+    for f in SERVER_FEATURES:
+        expr = "{} > 0".format(f) if f in ("variables", "clauses") \
+            else "{} = probe_nonexistent_value".format(f)
+        url = QUERY_URL + "?" + urllib.parse.urlencode({"query": expr, "context": "cnf"})
+        try:
+            urllib.request.urlopen(url, timeout=180).read()
+            log("    {:<12} OK".format(f))
+        except urllib.error.HTTPError as e:
+            log("    {:<12} HTTP {}".format(f, e.code))
+        except Exception as e:
+            log("    {:<12} {}".format(f, str(e)[:60]))
 
 
 # ---------------------------------------------------------------------- query
 
 def stage_query(args):
-    paths = ensure_dbs(args.data_root)
-    conn = connect(paths)
-    feats = list_feature_tables(conn, len(paths))
-    if not feats:
-        log("ERROR: no feature tables found.  Run --stage schema and send me the output.")
-        sys.exit(1)
+    meta = read_meta(ensure_db(args.data_root))
 
-    def pick(*names):
-        for n in names:
-            for f in feats:
-                if f.lower() == n.lower():
-                    return f
-        return None
+    expr = "variables <= {} and clauses <= {}".format(MAX_VARIABLES, MAX_CLAUSES)
+    log("[query] server side: {}".format(expr))
+    hashes = server_query(expr)
+    log("[query] constraints A+B: {}".format(len(hashes)))
 
-    f_vars = pick("variables", "num_variables")
-    f_cls = pick("clauses", "num_clauses")
-    f_fam = pick("family")
-    f_res = pick("verified-result", "result")
-    f_rt = pick(args.runtime_feature) or next(
-        (f for f in sorted(feats) if "runtime" in f.lower()), None)
-
-    for label, f in [("variables", f_vars), ("clauses", f_cls)]:
-        if f is None:
-            log(f"ERROR: required feature '{label}' not found. "
-                "Run --stage schema and send me the output.")
-            sys.exit(1)
-    log(f"[query] using features: variables={f_vars} clauses={f_cls} "
-        f"family={f_fam} result={f_res} runtime={f_rt}")
-
-    variables = read_feature(conn, f_vars, feats[f_vars])
-    clauses = read_feature(conn, f_cls, feats[f_cls])
-    family = read_feature(conn, f_fam, feats[f_fam]) if f_fam else {}
-    result = read_feature(conn, f_res, feats[f_res]) if f_res else {}
-    runtime = read_feature(conn, f_rt, feats[f_rt]) if f_rt else {}
-    log(f"[query] {len(variables)} instances carry a variable count")
-
-    rows, n_ab, n_e = [], 0, 0
-    for h, v in variables.items():
-        nv, nc = as_float(v), as_float(clauses.get(h))
-        if nv is None or nc is None:
+    rows, n_meta, n_e, n_res = [], 0, 0, 0
+    for h in hashes:
+        d = meta.get(h)
+        if d is None:
             continue
-        if nv > MAX_VARIABLES or nc > MAX_CLAUSES:
-            continue
-        n_ab += 1
-        fam = family.get(h) or ""
-        if is_immune(fam):
+        n_meta += 1
+        fam = d.get("family") or ""
+        if is_immune(fam, d.get("filename") or ""):
             n_e += 1
             continue
-        rt = as_float(runtime.get(h))
-        rows.append({"hash": h, "family": fam, "variables": int(nv),
-                     "clauses": int(nc), "result": result.get(h) or "",
-                     "runtime": "" if rt is None else rt})
+        res = (d.get("result") or "").lower()
+        if args.require_known_result and res not in ("sat", "unsat"):
+            n_res += 1
+            continue
+        rows.append({"hash": h, "family": fam, "result": res,
+                     "minisat1m": d.get("minisat1m") or "",
+                     "filename": d.get("filename") or ""})
 
-    log(f"[query] constraints A+B (vars<={MAX_VARIABLES}, clauses<={MAX_CLAUSES}): {n_ab}")
-    log(f"[query] constraint E (resolution-hard families): -{n_e} -> {len(rows)}")
+    log("[query] joined against meta.db: {}".format(n_meta))
+    log("[query] constraint E (resolution-hard families): -{}".format(n_e))
+    if args.require_known_result:
+        log("[query] result in sat/unsat: -{}".format(n_res))
+    log("[query] -> {} candidates".format(len(rows)))
 
-    if runtime:
-        before = len(rows)
-        rows = [r for r in rows
-                if r["runtime"] != ""
-                and args.min_runtime <= r["runtime"] <= args.max_runtime]
-        log(f"[query] constraint D (difficulty, {f_rt} in "
-            f"[{args.min_runtime}, {args.max_runtime}]s): {before} -> {len(rows)}")
-    else:
-        log("[query] WARNING: no runtime feature found; constraint D NOT applied")
-
-    rows.sort(key=lambda r: -(r["runtime"] if r["runtime"] != "" else 0))
     if args.max_candidates and len(rows) > args.max_candidates:
-        rows = rows[:args.max_candidates]
-        log(f"[query] capped to the hardest {args.max_candidates}")
+        # There is no server-side difficulty feature to rank by, so sample
+        # evenly across families rather than truncating, which would bias the
+        # set towards whatever the server happens to return first.
+        byfam = {}
+        for r in rows:
+            byfam.setdefault(r["family"], []).append(r)
+        picked, i = [], 0
+        while len(picked) < args.max_candidates:
+            added = False
+            for fam in sorted(byfam):
+                if i < len(byfam[fam]):
+                    picked.append(byfam[fam][i])
+                    added = True
+                    if len(picked) >= args.max_candidates:
+                        break
+            if not added:
+                break
+            i += 1
+        rows = picked
+        log("[query] sampled {} evenly across {} families".format(len(rows), len(byfam)))
 
     os.makedirs(args.out_dir, exist_ok=True)
     out = os.path.join(args.out_dir, "candidates.csv")
     with open(out, "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=["hash", "family", "variables",
-                                          "clauses", "result", "runtime"])
+        w = csv.DictWriter(f, fieldnames=["hash", "family", "result",
+                                          "minisat1m", "filename"])
         w.writeheader()
         w.writerows(rows)
-    log(f"[query] {len(rows)} candidates -> {out}")
+    log("[query] -> {}".format(out))
 
     hist = {}
     for r in rows:
         hist[r["family"] or "?"] = hist.get(r["family"] or "?", 0) + 1
-    log(f"\n[query] {len(hist)} families; top 30:")
+    log("")
+    log("[query] {} families; top 30:".format(len(hist)))
     for fam, n in sorted(hist.items(), key=lambda x: -x[1])[:30]:
-        log(f"    {n:5d}  {fam}")
+        log("    {:6d}  {}".format(n, fam))
 
 
-# ------------------------------------------------------------------- fetch
+# --------------------------------------------------------------------- fetch
 
 def stage_fetch(args):
     rows = list(csv.DictReader(open(os.path.join(args.out_dir, "candidates.csv"))))
     cnfdir = os.path.join(args.data_root, "cnf")
     os.makedirs(cnfdir, exist_ok=True)
-    log(f"[fetch] {len(rows)} candidates -> {cnfdir}")
+    log("[fetch] {} candidates -> {}".format(len(rows), cnfdir))
 
     def one(r):
         h = r["hash"]
@@ -293,7 +272,7 @@ def stage_fetch(args):
             return h, None, download(FILE_URL.format(hash=h),
                                      os.path.join(cnfdir, h + ".cnf.xz"))
         except Exception as e:
-            return h, str(e), False
+            return h, str(e)[:80], False
 
     ok = failed = cached = 0
     with ThreadPoolExecutor(max_workers=args.jobs) as ex:
@@ -302,16 +281,16 @@ def stage_fetch(args):
             h, err, fresh = fut.result()
             if err:
                 failed += 1
-                log(f"  [{i}/{len(rows)}] FAIL {h}: {err}")
+                log("  [{}/{}] FAIL {}: {}".format(i, len(rows), h, err))
             else:
                 ok += 1
                 cached += 0 if fresh else 1
-            if i % 50 == 0:
-                log(f"  [{i}/{len(rows)}] ok={ok} failed={failed}")
-    log(f"[fetch] ok={ok} (cached={cached}) failed={failed}")
+            if i % 200 == 0:
+                log("  [{}/{}] ok={} failed={}".format(i, len(rows), ok, failed))
+    log("[fetch] ok={} (cached={}) failed={}".format(ok, cached, failed))
 
 
-# ------------------------------------------------------------------- verify
+# -------------------------------------------------------------------- verify
 
 def open_maybe_compressed(path):
     with open(path, "rb") as probe:
@@ -371,7 +350,7 @@ def stage_verify(args):
         try:
             hv, hc, lits = count_cnf(path)
         except Exception as e:
-            log(f"  parse failed {r['hash']}: {e}")
+            log("  parse failed {}: {}".format(r["hash"], e))
             missing += 1
             continue
         r["header_variables"], r["header_clauses"] = hv, hc
@@ -381,12 +360,12 @@ def stage_verify(args):
             kept.append(r)
         else:
             over += 1
-        if i % 100 == 0:
-            log(f"  [{i}/{len(rows)}] kept={len(kept)} over={over}")
+        if i % 500 == 0:
+            log("  [{}/{}] kept={} over={}".format(i, len(rows), len(kept), over))
 
-    log(f"[verify] constraint C (<= {MAX_LITERAL_ELEMENTS} literal elements): "
-        f"{len(rows)-missing} checked -> {len(kept)} kept, {over} over budget, "
-        f"{missing} unavailable")
+    log("[verify] literal budget (<= {}): {} checked -> {} kept, {} over, "
+        "{} unavailable".format(MAX_LITERAL_ELEMENTS, len(rows) - missing,
+                                len(kept), over, missing))
 
     out = os.path.join(args.out_dir, "evalset.csv")
     if kept:
@@ -394,32 +373,36 @@ def stage_verify(args):
             w = csv.DictWriter(f, fieldnames=list(kept[0].keys()))
             w.writeheader()
             w.writerows(kept)
-        log(f"[verify] -> {out}")
+        log("[verify] -> {}".format(out))
 
     fams = {}
     for r in kept:
         fams[r.get("family") or "?"] = fams.get(r.get("family") or "?", 0) + 1
-    log("\n[verify] surviving families:")
-    for fam, n in sorted(fams.items(), key=lambda x: -x[1]):
-        log(f"    {n:5d}  {fam}")
+    log("")
+    log("[verify] {} surviving families; top 30:".format(len(fams)))
+    for fam, n in sorted(fams.items(), key=lambda x: -x[1])[:30]:
+        log("    {:6d}  {}".format(n, fam))
 
     n, nf = len(kept), len(fams)
-    log("\n" + "=" * 64)
-    log(f"VERDICT: {n} instances across {nf} families")
+    log("")
+    log("=" * 66)
+    log("VERDICT: {} instances across {} families".format(n, nf))
     if n >= VERDICT_GO_INSTANCES and nf >= VERDICT_GO_FAMILIES:
-        log("  GO -- proceed to the software experiment with NeuroBack's")
-        log("        pretrained model on this set.")
+        log("  GO on capacity.  The remaining unknown is difficulty: no GBD")
+        log("  runtime feature exists, so run a CPU CDCL solver over evalset.csv")
+        log("  and keep what clears the time floor.  That baseline run is also")
+        log("  step one of the NeuroBack phase-initialisation experiment, so it")
+        log("  is not extra work.")
     elif n >= VERDICT_MARGINAL_INSTANCES:
-        log("  MARGINAL -- usable but thin.  Pad with CNFgen-generated")
-        log("        families before drawing conclusions.")
+        log("  MARGINAL -- usable but thin.  Pad with CNFgen-generated families.")
     else:
-        log("  STOP -- the three constraints have an effectively empty")
-        log("        intersection.  Either restore _FPGA_MAX_LITERAL_ELEMENTS")
-        log("        to 1048576 (needs the URAM back) or change the target.")
-    log("=" * 64)
+        log("  STOP -- the capacity constraints have an effectively empty")
+        log("  intersection.  Either restore _FPGA_MAX_LITERAL_ELEMENTS to")
+        log("  1048576 (needs the URAM back) or change the target.")
+    log("=" * 66)
 
 
-# --------------------------------------------------------------------- main
+# ----------------------------------------------------------------------- main
 
 def main():
     p = argparse.ArgumentParser(
@@ -427,26 +410,24 @@ def main():
     p.add_argument("--stage", choices=["schema", "query", "fetch", "verify", "all"],
                    default="all")
     p.add_argument("--data-root", default="/mnt/data/satbench",
-                   help="bulk storage for GBD databases and CNFs (default: %(default)s)")
+                   help="bulk storage for meta.db and CNFs (default: %(default)s)")
     p.add_argument("--out-dir", default="./evalset",
                    help="small outputs: candidates.csv, evalset.csv (default: %(default)s)")
-    p.add_argument("--runtime-feature", default="runtime-kissat",
-                   help="GBD feature used as the difficulty proxy; falls back to the "
-                        "first feature whose name contains 'runtime'")
-    p.add_argument("--min-runtime", type=float, default=1.0,
-                   help="seconds; SAT-Accel is ~3x a 64-core Kissat (default: %(default)s)")
-    p.add_argument("--max-runtime", type=float, default=4000.0,
-                   help="seconds; below the competition timeout, so known solvable")
-    p.add_argument("--max-candidates", type=int, default=1500,
-                   help="cap before downloading; keeps the hardest N")
-    p.add_argument("--jobs", type=int, default=8)
+    p.add_argument("--require-known-result", action="store_true", default=True,
+                   help="keep only instances whose result is sat or unsat (default)")
+    p.add_argument("--all-results", dest="require_known_result", action="store_false",
+                   help="also keep instances whose result is unknown")
+    p.add_argument("--max-candidates", type=int, default=0,
+                   help="0 = no cap.  Downloads average 0.08 MB per instance, so the "
+                        "full candidate set is well under 1 GB")
+    p.add_argument("--jobs", type=int, default=12)
     args = p.parse_args()
 
     os.makedirs(args.data_root, exist_ok=True)
     os.makedirs(args.out_dir, exist_ok=True)
-    log(f"capacity limits: vars<={MAX_VARIABLES} clauses<={MAX_CLAUSES} "
-        f"literals<={MAX_LITERAL_ELEMENTS}")
-    log(f"data root: {args.data_root}")
+    log("capacity limits: vars<={} clauses<={} literals<={}".format(
+        MAX_VARIABLES, MAX_CLAUSES, MAX_LITERAL_ELEMENTS))
+    log("data root: {}".format(args.data_root))
 
     if args.stage == "schema":
         stage_schema(args)
