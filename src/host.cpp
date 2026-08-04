@@ -901,12 +901,17 @@ void printUsage(const char* executable){
               << "  " << executable
               << " <xclbin> <configuration.json> <input.dimacs> <metrics.csv> [expected: 0|1]\n"
               << "  " << executable
-              << " --batch <xclbin> <configuration.json> <manifest.tsv> <metrics.csv>\n";
+              << " --batch <xclbin> <configuration.json> <manifest.tsv> <metrics.csv>\n"
+              << "  " << executable
+              << " --server <xclbin> <configuration.json> <metrics.csv>\n";
 }
 
 int main(int argc, char* argv[]){
     const bool batchMode = argc > 1 && std::string(argv[1]) == "--batch";
-    if((!batchMode && argc != 5 && argc != 6) || (batchMode && argc != 6)){
+    const bool serverMode = argc > 1 && std::string(argv[1]) == "--server";
+    const bool singleMode = !batchMode && !serverMode;
+    if((singleMode && argc != 5 && argc != 6) || (batchMode && argc != 6) ||
+       (serverMode && argc != 5)){
         printUsage(argv[0]);
         return 2;
     }
@@ -916,11 +921,11 @@ int main(int argc, char* argv[]){
     }
     std::cout << "\n";
 
-    const int argumentOffset = batchMode ? 1 : 0;
+    const int argumentOffset = singleMode ? 0 : 1;
     const std::string xclbinPath = argv[1 + argumentOffset];
     const std::string configurationPath = argv[2 + argumentOffset];
-    const std::string inputPath = argv[3 + argumentOffset];
-    const std::string metricsPath = argv[4 + argumentOffset];
+    const std::string inputPath = serverMode ? "" : argv[3 + argumentOffset];
+    const std::string metricsPath = serverMode ? argv[4] : argv[4 + argumentOffset];
 
     std::vector<BatchQuery> queries;
     if(batchMode && !parseBatchManifest(inputPath, queries)){
@@ -945,7 +950,42 @@ int main(int argc, char* argv[]){
         return 2;
     }
 
-    if(!batchMode){
+    if(serverMode){
+        std::cout << "INDUCTOR-SAT-ACCEL\tREADY\n" << std::flush;
+        std::string request;
+        while(std::getline(std::cin, request)){
+            if(!request.empty() && request.back() == '\r'){
+                request.pop_back();
+            }
+            const std::size_t separator = request.find('\t');
+            if(separator == std::string::npos ||
+               request.find('\t', separator + 1) != std::string::npos){
+                std::cerr << "Invalid server request: expected '<request id>\\t<CNF path>'\n";
+                return 2;
+            }
+            const std::string requestId = request.substr(0, separator);
+            const std::string queryPath = request.substr(separator + 1);
+            if(requestId.empty() || queryPath.empty() || !std::filesystem::is_regular_file(queryPath)){
+                std::cerr << "Invalid server request or missing CNF: " << request << "\n";
+                return 2;
+            }
+
+            problemData pd{};
+            parseDIMACS(queryPath, pd, configuration);
+            const bool solved = solve(queryPath, metricsPath, pd, configuration, -1, session);
+            const int answer = pd.md.miscCounters[6];
+            cleanUp(pd);
+            if(!solved){
+                return 2;
+            }
+            const int resultCode = answer == 1 ? 10 : 20;
+            std::cout << "INDUCTOR-SAT-ACCEL\tRESULT\t" << requestId << "\t"
+                      << resultCode << "\n" << std::flush;
+        }
+        return 0;
+    }
+
+    if(singleMode){
         problemData pd{};
         parseDIMACS(inputPath, pd, configuration);
         const bool solved = solve(inputPath, metricsPath, pd, configuration, expectedAnswer, session);

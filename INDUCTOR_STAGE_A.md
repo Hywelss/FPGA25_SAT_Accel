@@ -96,6 +96,18 @@ This mode reuses the XRT context, program, command queue, and kernel handles.
 It still allocates fresh buffers and relaunches all cooperating kernels for
 every query. It is therefore session reuse, not incremental SAT.
 
+The same session can serve online rIC3 queries. This is opt-in and currently
+intended for the single-process `ic3` flow:
+
+```bash
+export INDUCTOR_SAT_ACCEL_SESSION=1
+ric3 check model.aig ic3
+```
+
+rIC3 starts one host process, waits until it has programmed the device exactly
+once, and serializes query paths over a request-ID protocol. All differential
+verification, model validation, and capture checks remain active in this mode.
+
 ## Validation record (2026-08-04)
 
 The VCK5000 reported `Ready: Yes`. Validation used the existing checked-in
@@ -124,3 +136,8 @@ With model checking, oracle verification, and capture all enabled, `mult2.aig`
 again completed UNSAT on VCK5000. Its preprocessing path issued seven FPGA
 queries (two SAT and five UNSAT), including queries with two assumptions and
 queries with two or four temporary clauses. Every verdict matched CaDiCaL.
+
+Enabling the online session for the same `mult2.aig` path reduced end-to-end
+time from about 12.43 seconds to 2.55 seconds while preserving the seven query
+verdicts and final UNSAT result. This measures avoided host/xclbin startup; it
+does not claim kernel-state reuse.
