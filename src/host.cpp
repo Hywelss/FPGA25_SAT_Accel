@@ -10,6 +10,7 @@
 #include <chrono>
 #include <queue>
 #include <cstdlib>
+#include <thread>
 #include "rapidjson/rapidjson.h"
 #include "rapidjson/document.h"
 #include "rapidjson/istreamwrapper.h"
@@ -57,8 +58,24 @@ void cleanUp(problemData pd){
     free(pd.clsStates);
 }
 
+template <typename T>
+T* allocateAligned(std::size_t count){
+    void* memory = nullptr;
+    const int error = posix_memalign(&memory, 4096, count * sizeof(T));
+    if(error != 0){
+        std::cerr << "Failed to allocate " << count * sizeof(T)
+                  << " bytes of aligned host memory, error number: " << error << "\n";
+        exit(EXIT_FAILURE);
+    }
+    return static_cast<T*>(memory);
+}
+
 void parseJSON(std::string filePath, rapidjson::Document& configuration){
     std::ifstream file(filePath); 
+    if(!file.is_open()){
+        std::cerr << "Could not open configuration file: " << filePath << "\n";
+        exit(EXIT_FAILURE);
+    }
   
     rapidjson::IStreamWrapper isw(file);
     configuration.ParseStream(isw);
@@ -96,9 +113,16 @@ void parseDIMACS(std::string filePath, problemData& pd, const rapidjson::Documen
             }
         }
 
+        if(tokens.empty()){
+            continue;
+        }
         if(tokens[0] == "c"){
             continue;
         }else if(state == 0 && tokens[0] == "p"){
+            if(tokens.size() != 4 || tokens[1] != "cnf"){
+                std::cerr << "Invalid DIMACS header in " << filePath << "\n";
+                exit(EXIT_FAILURE);
+            }
             pd.md.numLiterals = std::stoi(tokens[2]);
             pd.md.numClauses = std::stoi(tokens[3]);
 
@@ -107,12 +131,20 @@ void parseDIMACS(std::string filePath, problemData& pd, const rapidjson::Documen
             clsStore = std::vector<std::vector<cls>>(pd.md.numClauses);
             state = 1;
         }else if(state == 1){
+            if(counter >= (int)clsStore.size()){
+                std::cerr << "DIMACS contains more clauses than declared in " << filePath << "\n";
+                exit(EXIT_FAILURE);
+            }
             unsigned int length = tokens.size();
             if(tokens[tokens.size()-1] == "0"){
                 length--;
             }
             for(unsigned int i = 0; i < length; i++){
                 lit getLit = std::stoi(tokens[i]);
+                if(getLit == 0 || (unsigned int)abs(getLit) > pd.md.numLiterals){
+                    std::cerr << "DIMACS literal out of range in " << filePath << ": " << getLit << "\n";
+                    exit(EXIT_FAILURE);
+                }
                 const bool isIn = checkLit.find(getLit) != checkLit.end();
                 if(!isIn){
                     clsStore[counter].push_back(getLit);
@@ -127,9 +159,17 @@ void parseDIMACS(std::string filePath, problemData& pd, const rapidjson::Documen
             }else{
                 continue;
             }
+        }else{
+            std::cerr << "DIMACS content appears before its header in " << filePath << "\n";
+            exit(EXIT_FAILURE);
         }
     }
     input.close(); 
+
+    if(state == 0 || !checkLit.empty() || counter != (int)clsStore.size()){
+        std::cerr << "DIMACS clause count does not match its header in " << filePath << "\n";
+        exit(EXIT_FAILURE);
+    }
 
     std::vector<int> histogram[2];
     histogram[0] = std::vector<int>(18,0);
@@ -152,15 +192,12 @@ void parseDIMACS(std::string filePath, problemData& pd, const rapidjson::Documen
 
     memset(pd.md.miscCounters,0,sizeof(int)*(256));
 
-    int memErr;
-    memErr = posix_memalign((void**)&pd.clauseStore, 4096, _HOST_MAX_CLAUSE_ELEMENTS*sizeof(cls));
-    memErr = posix_memalign((void**)&pd.cmd, 4096, _FPGA_MAX_CLAUSES*sizeof(clauseMetaData));
-    memErr = posix_memalign((void**)&pd.litStore, 4096, _HOST_MAX_LITERAL_ELEMENTS*sizeof(lit));
-    memErr = posix_memalign((void**)&pd.litStore, 4096, _HOST_MAX_LITERAL_ELEMENTS*sizeof(lit));
-    
-    memErr = posix_memalign((void**)&pd.answerStack, 4096, pd.md.numLiterals*sizeof(lit));
-    memErr = posix_memalign((void**)&pd.lmd, 4096, pd.md.numLiterals*sizeof(literalMetaDataPCIE));
-    memErr = posix_memalign((void**)&pd.clsStates, 4096, _FPGA_MAX_CLAUSES*sizeof(clsStatePCIE));
+    pd.clauseStore = allocateAligned<cls>(_HOST_MAX_CLAUSE_ELEMENTS);
+    pd.cmd = allocateAligned<clauseMetaData>(_FPGA_MAX_CLAUSES);
+    pd.litStore = allocateAligned<lit>(_HOST_MAX_LITERAL_ELEMENTS);
+    pd.answerStack = allocateAligned<lit>(pd.md.numLiterals);
+    pd.lmd = allocateAligned<literalMetaDataPCIE>(pd.md.numLiterals);
+    pd.clsStates = allocateAligned<clsStatePCIE>(_FPGA_MAX_CLAUSES);
 
     memset(pd.cmd,0,_FPGA_MAX_CLAUSES*sizeof(clauseMetaData));
     memset(pd.litStore,0,_HOST_MAX_LITERAL_ELEMENTS*sizeof(lit));
@@ -375,105 +412,86 @@ void parseDIMACS(std::string filePath, problemData& pd, const rapidjson::Documen
     }
 }
 
-bool solve(std::string xclBinFile, std::string inputFilePath, std::string outputResultFile, problemData& pd, const rapidjson::Document& configuration, const int expectedAnswer){
-    std::vector<cl::Device> devices = xcl::get_xil_devices();
-	std::vector<unsigned char> fileBuf = xcl::read_binary_file(xclBinFile);
-	cl::Program::Binaries bins{{fileBuf.data(), fileBuf.size()}};
-
-	unsigned int valid_device = 0;
-	cl_int err = 0;
+struct FpgaSession {
     cl::CommandQueue q;
-	cl::Device device;
-	cl::Context context;
-	cl::Kernel satSolverKernel;
+    cl::Device device;
+    cl::Context context;
+    cl::Program program;
+    cl::Kernel satSolverKernel;
     cl::Kernel clsStoreKernel;
     cl::Kernel storePositionKernel;
     cl::Kernel restartCalculateKernel;
-	cl::Kernel timerKernel;
-	cl::Kernel pqHandlerKernel;
+    cl::Kernel timerKernel;
+    cl::Kernel pqHandlerKernel;
     cl::Kernel messageKernel;
-	const char* requestedDevice = std::getenv("FPGA_DEVICE_NAME");
-	bool useHostOnlyDebug = false;
+    bool useHostOnlyDebug = false;
 
-	for (unsigned int i = 0; i < devices.size(); i++) {
-		device = devices[i];
-		const std::string deviceName = device.getInfo<CL_DEVICE_NAME>();
-		if(requestedDevice != nullptr && deviceName.find(requestedDevice) == std::string::npos){
-			continue;
-		}
+    bool initialize(const std::string& xclBinFile){
+        const std::vector<cl::Device> devices = xcl::get_xil_devices();
+        const std::vector<unsigned char> fileBuf = xcl::read_binary_file(xclBinFile);
+        const cl::Program::Binaries bins{{fileBuf.data(), fileBuf.size()}};
+        const char* requestedDevice = std::getenv("FPGA_DEVICE_NAME");
 
-		// Creating Context and Command Queue for selected Device
-		context = cl::Context(device, NULL, NULL, NULL, &err);
-		if(err != CL_SUCCESS){
-			std::cerr << "Could not create context for device[" << i << "], error number: " << err << "\n";
-			continue;
-		}
+        for(unsigned int i = 0; i < devices.size(); i++){
+            cl_int err = CL_SUCCESS;
+            device = devices[i];
+            const std::string deviceName = device.getInfo<CL_DEVICE_NAME>();
+            if(requestedDevice != nullptr && deviceName.find(requestedDevice) == std::string::npos){
+                continue;
+            }
+            context = cl::Context(device, NULL, NULL, NULL, &err);
+            if(err != CL_SUCCESS){
+                std::cerr << "Could not create context for device[" << i << "], error number: " << err << "\n";
+                continue;
+            }
+            q = cl::CommandQueue(context, device, CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE|CL_QUEUE_PROFILING_ENABLE, &err);
+            if(err != CL_SUCCESS){
+                std::cerr << "Could not create command queue for device[" << i << "], error number: " << err << "\n";
+                continue;
+            }
+            std::cout << "Trying to program device[" << i << "]: " << deviceName << std::endl;
+            program = cl::Program(context, {device}, bins, NULL, &err);
+            if(err != CL_SUCCESS){
+                std::cerr << "Failed to program device[" << i << "] with xclbin file, error number: " << err << "\n";
+                continue;
+            }
+            std::cout << "Device[" << i << "]: program successful!\n";
 
-		q = cl::CommandQueue(context, device, CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE|CL_QUEUE_PROFILING_ENABLE, &err);
-		if(err != CL_SUCCESS){
-			std::cerr << "Could not create command queue for device[" << i << "], error number: " << err << "\n";
-			continue;
-		}
-		std::cout << "Trying to program device[" << i << "]: " << deviceName << std::endl;
+            satSolverKernel = cl::Kernel(program, "solver", &err);
+            if(err == CL_SUCCESS) storePositionKernel = cl::Kernel(program, "location_handler", &err);
+            if(err == CL_SUCCESS) clsStoreKernel = cl::Kernel(program, "clause_store_handler", &err);
+            if(err == CL_SUCCESS) restartCalculateKernel = cl::Kernel(program, "restartCalculator", &err);
+            if(err == CL_SUCCESS) timerKernel = cl::Kernel(program, "timer", &err);
+            if(err == CL_SUCCESS) pqHandlerKernel = cl::Kernel(program, "pqHandler", &err);
+            if(err == CL_SUCCESS) messageKernel = cl::Kernel(program, "message", &err);
+            if(err != CL_SUCCESS){
+                std::cerr << "Could not create SAT-Accel kernels, error number: " << err << "\n";
+                return false;
+            }
+            useHostOnlyDebug = deviceName.find("u55c") != std::string::npos;
+            return true;
+        }
+        if(requestedDevice != nullptr){
+            std::cerr << "No programmable Xilinx device matched FPGA_DEVICE_NAME=" << requestedDevice << "\n";
+        }
+        std::cerr << "Failed to program any device found, exit!\n";
+        return false;
+    }
+};
 
-		cl::Program program(context, { device }, bins, NULL, &err);
-	
-		if(err != CL_SUCCESS){
-			std::cerr << "Failed to program device[" << i << "] with xclbin file, error number: " << err << "\n";
-			continue;
-		}else{
-			std::cout << "Device[" << i << "]: program successful!\n";
-			// Creating Kernel
-
-			satSolverKernel = cl::Kernel(program, "solver", &err);
-			if(err != CL_SUCCESS){
-				std::cerr << "Could not create sat solver accelerate kernel, error number: " << err << "\n";
-				return false;
-			}
-            storePositionKernel = cl::Kernel(program, "location_handler", &err);
-			if(err != CL_SUCCESS){
-				std::cerr << "Could not create location handler accelerate kernel, error number: " << err << "\n";
-				return false;
-			}
-            clsStoreKernel = cl::Kernel(program, "clause_store_handler", &err);
-			if(err != CL_SUCCESS){
-				std::cerr << "Could not create clause store handler accelerate kernel, error number: " << err << "\n";
-				return false;
-			}
-            restartCalculateKernel = cl::Kernel(program, "restartCalculator", &err);
-			if(err != CL_SUCCESS){
-				std::cerr << "Could not create restart calculator accelerate kernel, error number: " << err << "\n";
-				return false;
-			}
-            timerKernel = cl::Kernel(program, "timer", &err);
-			if(err != CL_SUCCESS){
-				std::cerr << "Could not create timer accelerate kernel, error number: " << err << "\n";
-				return false;
-			}
-            pqHandlerKernel = cl::Kernel(program, "pqHandler", &err);
-			if(err != CL_SUCCESS){
-				std::cerr << "Could not create PQHandler accelerate kernel, error number: " << err << "\n";
-				return false;
-			}
-            messageKernel = cl::Kernel(program, "message", &err);
-			if(err != CL_SUCCESS){
-				std::cerr << "Could not create message accelerate kernel, error number: " << err << "\n";
-				return false;
-			}
-			useHostOnlyDebug = deviceName.find("u55c") != std::string::npos;
-		}
-
-		valid_device = 1;
-		break; // we break because we found a valid device
-	}
-
-	if(valid_device == 0) {
-		if(requestedDevice != nullptr){
-			std::cerr << "No programmable Xilinx device matched FPGA_DEVICE_NAME=" << requestedDevice << "\n";
-		}
-		std::cerr << "Failed to program any device found, exit!\n";
-		return false;
-	}
+bool solve(std::string inputFilePath, std::string outputResultFile, problemData& pd,
+    const rapidjson::Document& configuration, const int expectedAnswer, FpgaSession& session){
+    cl_int err = CL_SUCCESS;
+    cl::CommandQueue& q = session.q;
+    cl::Context& context = session.context;
+    cl::Kernel& satSolverKernel = session.satSolverKernel;
+    cl::Kernel& clsStoreKernel = session.clsStoreKernel;
+    cl::Kernel& storePositionKernel = session.storePositionKernel;
+    cl::Kernel& restartCalculateKernel = session.restartCalculateKernel;
+    cl::Kernel& timerKernel = session.timerKernel;
+    cl::Kernel& pqHandlerKernel = session.pqHandlerKernel;
+    cl::Kernel& messageKernel = session.messageKernel;
+    const bool useHostOnlyDebug = session.useHostOnlyDebug;
 
     int argN = 0;
 
@@ -821,10 +839,75 @@ bool solve(std::string xclBinFile, std::string inputFilePath, std::string output
     return true;
 }
 
+struct BatchQuery {
+    int expectedAnswer;
+    std::filesystem::path inputPath;
+};
+
+bool parseBatchManifest(const std::filesystem::path& manifestPath, std::vector<BatchQuery>& queries){
+    std::ifstream manifest(manifestPath);
+    if(!manifest.is_open()){
+        std::cerr << "Could not open batch manifest: " << manifestPath << "\n";
+        return false;
+    }
+
+    const std::filesystem::path manifestDir = std::filesystem::absolute(manifestPath).parent_path();
+    std::string line;
+    unsigned int lineNumber = 0;
+    while(std::getline(manifest, line)){
+        lineNumber++;
+        if(!line.empty() && line.back() == '\r'){
+            line.pop_back();
+        }
+        if(line.empty() || line[0] == '#'){
+            continue;
+        }
+
+        const std::size_t separator = line.find('\t');
+        if(separator == std::string::npos || line.find('\t', separator + 1) != std::string::npos){
+            std::cerr << "Invalid batch manifest line " << lineNumber
+                      << ": expected '<0|1>\\t<CNF path>'\n";
+            return false;
+        }
+        const std::string expected = line.substr(0, separator);
+        const std::string pathText = line.substr(separator + 1);
+        if((expected != "0" && expected != "1") || pathText.empty()){
+            std::cerr << "Invalid batch manifest line " << lineNumber
+                      << ": expected '<0|1>\\t<CNF path>'\n";
+            return false;
+        }
+
+        std::filesystem::path inputPath(pathText);
+        if(inputPath.is_relative()){
+            inputPath = manifestDir / inputPath;
+        }
+        if(!std::filesystem::is_regular_file(inputPath)){
+            std::cerr << "CNF from batch manifest line " << lineNumber
+                      << " does not exist: " << inputPath << "\n";
+            return false;
+        }
+        queries.push_back({expected[0] - '0', inputPath.lexically_normal()});
+    }
+
+    if(queries.empty()){
+        std::cerr << "Batch manifest contains no queries: " << manifestPath << "\n";
+        return false;
+    }
+    return true;
+}
+
+void printUsage(const char* executable){
+    std::cerr << "Usage:\n"
+              << "  " << executable
+              << " <xclbin> <configuration.json> <input.dimacs> <metrics.csv> [expected: 0|1]\n"
+              << "  " << executable
+              << " --batch <xclbin> <configuration.json> <manifest.tsv> <metrics.csv>\n";
+}
+
 int main(int argc, char* argv[]){
-    if(argc != 5 && argc != 6){
-        std::cerr << "Usage: " << argv[0]
-                  << " <xclbin> <configuration.json> <input.dimacs> <metrics.csv> [expected: 0|1]\n";
+    const bool batchMode = argc > 1 && std::string(argv[1]) == "--batch";
+    if((!batchMode && argc != 5 && argc != 6) || (batchMode && argc != 6)){
+        printUsage(argv[0]);
         return 2;
     }
 
@@ -833,22 +916,68 @@ int main(int argc, char* argv[]){
     }
     std::cout << "\n";
 
-    //1 workload-hw.xclbin
-    //2 configuration
-    //3 dimacs file
-    //4 results.txt
-    //5 optional expected answer (0 = UNSAT, 1 = SAT)
+    const int argumentOffset = batchMode ? 1 : 0;
+    const std::string xclbinPath = argv[1 + argumentOffset];
+    const std::string configurationPath = argv[2 + argumentOffset];
+    const std::string inputPath = argv[3 + argumentOffset];
+    const std::string metricsPath = argv[4 + argumentOffset];
 
-    problemData pd;
-    rapidjson::Document configuration;
-    parseJSON(std::string(argv[2]), configuration);
-    parseDIMACS(std::string(argv[3]), pd, configuration);
-    const int expectedAnswer = argc == 6 ? std::stoi(argv[5]) : -1;
-    const bool solved = solve(std::string(argv[1]), std::string(argv[3]), std::string(argv[4]), pd, configuration, expectedAnswer);
-    const int answer = pd.md.miscCounters[6];
-    cleanUp(pd);
-    if(!solved){
+    std::vector<BatchQuery> queries;
+    if(batchMode && !parseBatchManifest(inputPath, queries)){
         return 2;
     }
-    return argc == 6 ? 0 : (answer == 1 ? 10 : 20);
+
+    int expectedAnswer = -1;
+    if(!batchMode && argc == 6){
+        const std::string expected = argv[5];
+        if(expected != "0" && expected != "1"){
+            std::cerr << "Expected answer must be 0 (UNSAT) or 1 (SAT)\n";
+            return 2;
+        }
+        expectedAnswer = expected[0] - '0';
+    }
+
+    rapidjson::Document configuration;
+    parseJSON(configurationPath, configuration);
+
+    FpgaSession session;
+    if(!session.initialize(xclbinPath)){
+        return 2;
+    }
+
+    if(!batchMode){
+        problemData pd{};
+        parseDIMACS(inputPath, pd, configuration);
+        const bool solved = solve(inputPath, metricsPath, pd, configuration, expectedAnswer, session);
+        const int answer = pd.md.miscCounters[6];
+        cleanUp(pd);
+        if(!solved){
+            return 2;
+        }
+        return argc == 6 ? 0 : (answer == 1 ? 10 : 20);
+    }
+
+    const auto batchStart = std::chrono::steady_clock::now();
+    for(std::size_t i = 0; i < queries.size(); i++){
+        const auto queryStart = std::chrono::steady_clock::now();
+        problemData pd{};
+        std::cout << "BATCH QUERY " << (i + 1) << "/" << queries.size()
+                  << ": " << queries[i].inputPath << " expected=" << queries[i].expectedAnswer << "\n";
+        parseDIMACS(queries[i].inputPath.string(), pd, configuration);
+        const bool solved = solve(queries[i].inputPath.string(), metricsPath, pd, configuration,
+                                  queries[i].expectedAnswer, session);
+        cleanUp(pd);
+        if(!solved){
+            return 2;
+        }
+        const std::chrono::duration<double> queryTime =
+            std::chrono::steady_clock::now() - queryStart;
+        std::cout << "BATCH QUERY " << (i + 1) << " HOST WALL TIME: "
+                  << queryTime.count() << " s\n";
+    }
+    const std::chrono::duration<double> batchTime =
+        std::chrono::steady_clock::now() - batchStart;
+    std::cout << "BATCH COMPLETE: " << queries.size() << " queries, "
+              << batchTime.count() << " s host wall time\n";
+    return 0;
 }

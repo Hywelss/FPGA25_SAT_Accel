@@ -69,6 +69,33 @@ the transition relation, permanent frame lemmas, temporary clauses, and
 assumptions as unit clauses. SAT models are returned to rIC3. For UNSAT, Stage
 A conservatively marks every assumption as part of the core.
 
+For differential checking and query capture, enable:
+
+```bash
+export INDUCTOR_SAT_ACCEL_VERIFY=1
+export INDUCTOR_SAT_ACCEL_CAPTURE_DIR=/path/to/capture
+```
+
+Verification solves the submitted formula independently with CaDiCaL and
+checks every SAT model against every submitted clause. Capture writes matching
+`.cnf` and `.result` files without overwriting an existing query.
+
+## Single-session query replay
+
+The Stage A host can replay captured queries while programming the device only
+once. The manifest is strict TSV; each non-comment line contains the expected
+answer (`0` for UNSAT or `1` for SAT), one tab, and a CNF path. Relative paths
+are resolved from the manifest directory.
+
+```bash
+build/stage-a/inductor-sat-host --batch \
+  src/bin/workload-hw.xclbin src/configuration.json manifest.tsv metrics.csv
+```
+
+This mode reuses the XRT context, program, command queue, and kernel handles.
+It still allocates fresh buffers and relaunches all cooperating kernels for
+every query. It is therefore session reuse, not incremental SAT.
+
 ## Validation record (2026-08-04)
 
 The VCK5000 reported `Ready: Yes`. Validation used the existing checked-in
@@ -86,3 +113,14 @@ The VCK5000 reported `Ready: Yes`. Validation used the existing checked-in
 - rIC3 `mult2.aig`: thirteen SAT-Accel queries, final UNSAT verdict matching
   GipSAT. This run exercised temporary clauses, up to four assumptions, SAT
   models, and conservative full-assumption UNSAT cores.
+
+Additional validation on 2026-08-04 used a five-query corpus captured from
+`cnt1e.aag`. One batch process produced the expected sequence UNSAT, SAT,
+UNSAT, SAT, UNSAT. The xclbin was programmed once. Host wall time was about
+0.657 seconds total: about 0.644 seconds for the first query and about 3
+milliseconds for each later query; kernel times were 59--159 microseconds.
+
+With model checking, oracle verification, and capture all enabled, `mult2.aig`
+again completed UNSAT on VCK5000. Its preprocessing path issued seven FPGA
+queries (two SAT and five UNSAT), including queries with two assumptions and
+queries with two or four temporary clauses. Every verdict matched CaDiCaL.
