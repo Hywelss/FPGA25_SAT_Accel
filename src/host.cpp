@@ -375,7 +375,7 @@ void parseDIMACS(std::string filePath, problemData& pd, const rapidjson::Documen
     }
 }
 
-bool solve(std::string xclBinFile, std::string inputFilePath, std::string outputResultFile, problemData pd, const rapidjson::Document& configuration, const int trueAnswer){
+bool solve(std::string xclBinFile, std::string inputFilePath, std::string outputResultFile, problemData& pd, const rapidjson::Document& configuration, const int expectedAnswer){
     std::vector<cl::Device> devices = xcl::get_xil_devices();
 	std::vector<unsigned char> fileBuf = xcl::read_binary_file(xclBinFile);
 	cl::Program::Binaries bins{{fileBuf.data(), fileBuf.size()}};
@@ -715,7 +715,7 @@ bool solve(std::string xclBinFile, std::string inputFilePath, std::string output
         exit(3);
     }
 
-    if(pd.md.miscCounters[6] != trueAnswer){
+    if(expectedAnswer >= 0 && pd.md.miscCounters[6] != expectedAnswer){
         std::cout << "ANSWERS ARE NOT THE SAME---GAVE: " << pd.md.miscCounters[6] << "\n";
         exit(4);
     }
@@ -788,6 +788,17 @@ bool solve(std::string xclBinFile, std::string inputFilePath, std::string output
         }
     }
 
+    if(pd.md.miscCounters[6] == 1){
+        std::cout << "s SATISFIABLE\n";
+        std::cout << "v";
+        for(unsigned int i = 0; i < pd.md.numLiterals; i++){
+            std::cout << " " << pd.answerStack[i];
+        }
+        std::cout << " 0\n";
+    }else{
+        std::cout << "s UNSATISFIABLE\n";
+    }
+
     std::ofstream outputFile;
     outputFile.open(outputResultFile,std::ios_base::app);
 
@@ -811,6 +822,12 @@ bool solve(std::string xclBinFile, std::string inputFilePath, std::string output
 }
 
 int main(int argc, char* argv[]){
+    if(argc != 5 && argc != 6){
+        std::cerr << "Usage: " << argv[0]
+                  << " <xclbin> <configuration.json> <input.dimacs> <metrics.csv> [expected: 0|1]\n";
+        return 2;
+    }
+
     for(int i = 0; i < argc; i++){
         std::cout << std::string(argv[i]) << " ";
     }
@@ -820,13 +837,18 @@ int main(int argc, char* argv[]){
     //2 configuration
     //3 dimacs file
     //4 results.txt
-    //5 true answer
+    //5 optional expected answer (0 = UNSAT, 1 = SAT)
 
     problemData pd;
     rapidjson::Document configuration;
     parseJSON(std::string(argv[2]), configuration);
     parseDIMACS(std::string(argv[3]), pd, configuration);
-    solve(std::string(argv[1]), std::string(argv[3]), std::string(argv[4]), pd, configuration, std::stoi(argv[5]));
+    const int expectedAnswer = argc == 6 ? std::stoi(argv[5]) : -1;
+    const bool solved = solve(std::string(argv[1]), std::string(argv[3]), std::string(argv[4]), pd, configuration, expectedAnswer);
+    const int answer = pd.md.miscCounters[6];
     cleanUp(pd);
-    return 0;
+    if(!solved){
+        return 2;
+    }
+    return argc == 6 ? 0 : (answer == 1 ? 10 : 20);
 }
