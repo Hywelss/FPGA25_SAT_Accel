@@ -5,11 +5,13 @@ void checkUndecided(hls::stream<colorAssignment>& toCommitStream,
     literalMinimizeMetaData lmmd[_FPGA_PARALLEL_MINIMIZE][_FPGA_MAX_LITERALS],
     cls unitByCls[_FPGA_MAX_LITERALS],
     unsigned int& answerStackHeight, unsigned int& duplicateCount, const lit topLiteral,
-    const unsigned int fixedDecisionStackHeight, const unsigned int decisionLevel, const ap_uint<1> POSITIVE_LIT_PHASE_VAL){
+    const unsigned int fixedDecisionStackHeight, const unsigned int decisionLevel,
+    const bool forceLiteralPhase, const ap_uint<1> POSITIVE_LIT_PHASE_VAL){
     #pragma HLS inline
 
     if(decisionLevel == 0){
-        WRITE_FIXED_DECISION: for(unsigned int i = answerStackHeight; i < fixedDecisionStackHeight; i++){
+        const unsigned int firstFixedDecision = answerStackHeight;
+        WRITE_FIXED_DECISION: for(unsigned int i = firstFixedDecision; i < fixedDecisionStackHeight; i++){
             #pragma HLS loop_tripcount min=256 max=256
             #pragma HLS pipeline
             #pragma HLS dependence variable=lmd inter false
@@ -20,7 +22,7 @@ void checkUndecided(hls::stream<colorAssignment>& toCommitStream,
             literalMinimizeMetaData getLmmd = lmmd[0][abs(getUndecided)-1];
 
             LMD_UNIT_BY_LIT(getLmd.compactlmd) = 0;
-            LMD_INSERT_LVL(getLmd.compactlmd) = answerStackHeight;
+            LMD_INSERT_LVL(getLmd.compactlmd) = i;
             LMD_DEC_LVL(getLmd.compactlmd) = decisionLevel;
             LMD_IS_IN_STACK(getLmd.compactlmd) = true;
 
@@ -49,9 +51,8 @@ void checkUndecided(hls::stream<colorAssignment>& toCommitStream,
             if(numElements == 0){
                 duplicateCount++;
             }
-
-            answerStackHeight++;
         }
+        answerStackHeight = fixedDecisionStackHeight;
     }else{
         lit getUndecided = topLiteral;
         lit absLit = abs(getUndecided)-1;
@@ -66,11 +67,11 @@ void checkUndecided(hls::stream<colorAssignment>& toCommitStream,
         LMMD_IS_DECIDE(getLmmd.compactlmmd) = true;
         LMMD_IS_IN_FIX_STACK(getLmmd.compactlmmd) = false;
 
-        if(POSITIVE_LIT_PHASE_VAL == 0){
+        if(!forceLiteralPhase && POSITIVE_LIT_PHASE_VAL == 0){
             if(LMD_PHASE(getLmd.compactlmd) == 1){
                 getUndecided = -getUndecided;
             }
-        }else{
+        }else if(!forceLiteralPhase){
             if(LMD_PHASE(getLmd.compactlmd) == 0){
                 getUndecided = -getUndecided;
             }
@@ -99,5 +100,3 @@ void checkUndecided(hls::stream<colorAssignment>& toCommitStream,
         answerStackHeight++;
     }
 }
-
-

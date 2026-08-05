@@ -1,0 +1,6 @@
+c ind-domain 1 2 0
+c ind-activation 2
+c ind-query-v1 0 0 2
+p cnf 2 2
+1 0
+-1 0

@@ -11,12 +11,15 @@ namespace lh{
     enum lh_codes{EXIT=-1,SEND=1,SAVE=2,UPDATE=3};
 }
 namespace csh{
-    enum csh_codes{EXIT=-1,SEND_LEN=1,SEND_LEN_BCP=2,SEND_CLS=3,SEND_CLS_MIN=4,SAVE=5,BUCKET=6,DELETE=7,MULTI_DEC=8};
+    enum csh_codes{EXIT=-1,SEND_LEN=1,SEND_LEN_BCP=2,SEND_CLS=3,SEND_CLS_MIN=4,SAVE=5,BUCKET=6,DELETE=7,MULTI_DEC=8,DELETE_IDS=9};
 }
 
 namespace pq{
-    enum pq_codes{EXIT=-1,GET_UNDECIDED=1,UPDATE=2,UNHIDE_ELE=3,CHECK_SCORE=4};
+    enum pq_codes{EXIT=-1,DOMAIN_EXHAUSTED=0,GET_UNDECIDED=1,UPDATE=2,UNHIDE_ELE=3,CHECK_SCORE=4,SWITCH_TO_HEAP=5,HIDE_ELE=6};
 }
+
+static const unsigned int GIPSAT_NUM_BUCKETS = 17;
+static const unsigned int GIPSAT_POSITION_NONE = UINT_MAX;
 
 namespace solverCode{
     enum sr_codes{UNIT=0,BACKTRACK=1,CLS2=2,EOS_CNT=3};
@@ -91,8 +94,15 @@ class mmuStream{
         unsigned int m_INCREMENT_COUNT;
     public:
         T array[elements];
+
+        mmuStream(){
+            reset(0, 0, 1);
+        }
         
         mmuStream(unsigned int initialStart, unsigned int LIMIT_VALUE, unsigned int INCREMENT_COUNT){
+            reset(initialStart, LIMIT_VALUE, INCREMENT_COUNT);
+        }
+        void reset(unsigned int initialStart, unsigned int LIMIT_VALUE, unsigned int INCREMENT_COUNT){
             m_insertIdx = 0;
             m_accessIdx = 0;
             m_usedCount = (LIMIT_VALUE-initialStart)/INCREMENT_COUNT;
@@ -221,9 +231,16 @@ struct pqPD{
 struct miscellaneousData{
     unsigned int numLiterals;
     unsigned int numClauses;
+    unsigned int numStoredClauses;
+    unsigned int numDomainLiterals;
+    unsigned int numPermanentClauses;
+    unsigned int numTemporaryClauses;
+    unsigned int numAssumptions;
+    unsigned int constraintActivation;
 
     unsigned int literalElements;
     unsigned int clauseElements;
+    unsigned int queryClauseElements;
 
     double decayFactor;
 
@@ -233,11 +250,17 @@ struct miscellaneousData{
 struct problemData{
     cls* clauseStore;
     clauseMetaData* cmd;
+    lit* queryClauseStore;
+    clauseMetaData* queryCmd;
     lit* litStore;
     lit* answerStack;
 
     literalMetaDataPCIE* lmd;
     clsStatePCIE* clsStates;
+    unsigned int* decisionDomain;
+    lit* assumptions;
+    unsigned int* clsToLitStorePos;
+    unsigned int* litToClsStorePos;
 
     miscellaneousData md;
 };

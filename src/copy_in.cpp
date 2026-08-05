@@ -52,14 +52,28 @@ void copy_litStore(ap_uint<512> mLitStore[_FPGA_MAX_LITERAL_ELEMENTS/16], ap_int
     }
 }
 
+void copy_domain(bool mInDomain[_FPGA_MAX_LITERALS], const unsigned int* decisionDomain,
+    const unsigned int NUM_LITERALS, const unsigned int NUM_DOMAIN_LITERALS){
+    #pragma HLS inline off
+
+    CLEAR_DOMAIN: for(unsigned int i = 0; i < NUM_LITERALS; i++){
+        #pragma HLS loop_tripcount min=1024 max=1024
+        mInDomain[i] = false;
+    }
+    LOAD_DOMAIN: for(unsigned int i = 0; i < NUM_DOMAIN_LITERALS; i++){
+        #pragma HLS loop_tripcount min=1 max=1024
+        mInDomain[decisionDomain[i]-1] = true;
+    }
+}
+
 void copy_in_dataflow_wrapper(clsState mClsStates[_FPGA_CLS_STATES_PARTITION][_FPGA_MAX_CLAUSES/_FPGA_CLS_STATES_PARTITION], 
     ap_uint<512> mLitStore[_FPGA_MAX_LITERAL_ELEMENTS/16],
     literalMetaData mlmd[_FPGA_MAX_LITERALS], literalMinimizeMetaData mlmmd[_FPGA_PARALLEL_MINIMIZE][_FPGA_MAX_LITERALS], 
-    lit mAnswerStack[_FPGA_MAX_LITERALS], 
+    lit mAnswerStack[_FPGA_MAX_LITERALS],
     clsStatePCIE* clsStates, ap_int<512>* litStore1, literalMetaDataPCIE* lmd, 
     lit* answerStack,
-    const unsigned int literalElements, const unsigned int numClauses, const unsigned int NUM_LITERALS, 
-    volatile uint64_t store[2]){
+    const unsigned int literalElements, const unsigned int numClauses,
+    const unsigned int NUM_LITERALS, volatile uint64_t store[2]){
     #pragma HLS inline off
     #pragma HLS dataflow
 

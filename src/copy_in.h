@@ -9,11 +9,15 @@ void copy_clsStore(ap_uint<512> mClsStore[_FPGA_MAX_LITERAL_ELEMENTS/16], ap_uin
 void copy_lmd(literalMetaData mlmd[_FPGA_MAX_LITERALS], literalMinimizeMetaData mlmmd[_FPGA_PARALLEL_MINIMIZE][_FPGA_MAX_LITERALS], literalMetaDataPCIE* lmd, const unsigned int NUM_LITERALS);
 void copy_answerStack(lit mAnswerStack[_FPGA_MAX_LITERALS], lit* answerStack, const unsigned int NUM_LITERALS);
 void copy_litStore(ap_uint<512> mLitStore[(_FPGA_MAX_LITERAL_ELEMENTS/16)/2], ap_int<512>* litStore, const unsigned int literalElements);
+void copy_domain(bool mInDomain[_FPGA_MAX_LITERALS], const unsigned int* decisionDomain,
+    const unsigned int NUM_LITERALS, const unsigned int NUM_DOMAIN_LITERALS);
 
 void copy_in_dataflow_wrapper(clsState mClsStates[_FPGA_CLS_STATES_PARTITION][_FPGA_MAX_CLAUSES/_FPGA_CLS_STATES_PARTITION], 
     ap_uint<512> mLitStore[_FPGA_MAX_LITERAL_ELEMENTS/16],
     literalMetaData mlmd[_FPGA_MAX_LITERALS], literalMinimizeMetaData mlmmd[_FPGA_PARALLEL_MINIMIZE][_FPGA_MAX_LITERALS], 
-    lit mAnswerStack[_FPGA_MAX_LITERALS], 
-    clsStatePCIE* clsStates, ap_int<512>* litStore1, literalMetaDataPCIE* lmd, lit* answerStack,
-    const unsigned int literalElements, const unsigned int numClauses, const unsigned int NUM_LITERALS, volatile uint64_t store[2]);
+    lit mAnswerStack[_FPGA_MAX_LITERALS],
+    clsStatePCIE* clsStates, ap_int<512>* litStore1, literalMetaDataPCIE* lmd,
+    lit* answerStack,
+    const unsigned int literalElements, const unsigned int numClauses,
+    const unsigned int NUM_LITERALS, volatile uint64_t store[2]);
 #endif

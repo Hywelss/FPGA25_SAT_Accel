@@ -27,7 +27,7 @@ OPENCL_FILES_CPP="host.cpp xcl2.cpp"
 OPENCL_FILES_OBJ="host.o xcl2.o"
 
 VITIS_HLS_CPP=()
-VITIS_HLS_CPP[0]="backtrack.cpp color.cpp copy_in.cpp decide.cpp discover.cpp learn.cpp minimize.cpp manage.cpp solver.cpp"
+VITIS_HLS_CPP[0]="backtrack.cpp color.cpp copy_in.cpp decide.cpp discover.cpp learn.cpp minimize.cpp manage.cpp unsat_core.cpp solver.cpp"
 VITIS_HLS_CPP[1]="clause_store_handler.cpp"
 VITIS_HLS_CPP[2]="location_handler.cpp"
 VITIS_HLS_CPP[3]="restart.cpp"
@@ -135,7 +135,16 @@ compile_kernel(){
 	PIDS=""
 	FAIL=0
 	extraCommands="$PLATFORM_DEFINE"
-	(set -x; rm bin/*-$EMU_TYPE.xo bin/workload-$EMU_TYPE.xclbin)
+	if [[ -n "${HLS_ONLY:-}" ]]
+	then
+		(set -x; rm -f "bin/workload-$HLS_ONLY-$EMU_TYPE.xo")
+	else
+		(set -x; rm -f bin/*-$EMU_TYPE.xo)
+	fi
+	if [[ $EMU_TYPE != hw ]]
+	then
+		rm -f bin/workload-$EMU_TYPE.xclbin bin/workload-$EMU_TYPE.xsa
+	fi
 
 	if [[ $EMU_TYPE == hw_emu || $EMU_TYPE == hw ]]
 	then
@@ -147,14 +156,18 @@ compile_kernel(){
 	########## BUILDS KERNEL ##########
 	echo -e "${CY}Running Vitis $EMU_TYPE make for the Vitis kernels... ${NC}"
 
-	for VITIS_HLS_CPP_VAL in "${VITIS_HLS_CPP[@]}"
+	for i in "${!VITIS_HLS_CPP[@]}"
 	do
+		if [[ -n "${HLS_ONLY:-}" && "${VITIS_HLS_KERNEL[i]}" != "$HLS_ONLY" ]]
+		then
+			continue
+		fi
 
 		(set -x; g++ -std=c++17 -w -O3 \
 		-I$XRT_INCLUDE \
 		-I$VITIS_INCLUDE \
 		$PLATFORM_DEFINE \
-		-c $VITIS_HLS_CPP_VAL; rm *.o)
+		-c ${VITIS_HLS_CPP[i]}; rm *.o)
 
 		if [ $? -ne 0 ]
 		then
@@ -166,6 +179,10 @@ compile_kernel(){
 
 	for i in "${!VITIS_HLS_CPP[@]}"
 	do
+		if [[ -n "${HLS_ONLY:-}" && "${VITIS_HLS_KERNEL[i]}" != "$HLS_ONLY" ]]
+		then
+			continue
+		fi
 		echo -e "${CY} ${VITIS_HLS_KERNEL[i]} kernel running at ${FREQ[i]} ${NC}"
 
 		(set -x; v++ -c -t $EMU_TYPE \
@@ -205,6 +222,11 @@ compile_kernel(){
 
 	########## LINK THE KERNELS TOGETHER ##########
 	echo -e "${CY}Running Vitis $EMU_TYPE link... ${NC}"
+	LINK_OUTPUT="bin/workload-$EMU_TYPE.xclbin"
+	if [[ $PLATFORM == *vck5000* ]]
+	then
+		LINK_OUTPUT="bin/workload-$EMU_TYPE.xsa"
+	fi
 
 	v++ -l $EN_PROF -t $EMU_TYPE \
 	--temp_dir ../_x \
@@ -221,12 +243,25 @@ compile_kernel(){
 	bin/workload-${VITIS_HLS_KERNEL[3]}-$EMU_TYPE.xo \
 	bin/workload-${VITIS_HLS_KERNEL[4]}-$EMU_TYPE.xo \
 	bin/workload-${VITIS_HLS_KERNEL[5]}-$EMU_TYPE.xo \
-	bin/workload-${VITIS_HLS_KERNEL[6]}-$EMU_TYPE.xo -o bin/workload-$EMU_TYPE.xclbin
+	bin/workload-${VITIS_HLS_KERNEL[6]}-$EMU_TYPE.xo -o "$LINK_OUTPUT"
 
-	if [ $? -ne 0 ]
+	if [[ $? -ne 0 || ! -s "$LINK_OUTPUT" ]]
 	then
 		echo -e "${RD}Failed to link kernel object ${NC}"
 		exit 1
+	fi
+	if [[ $PLATFORM == *vck5000* ]]
+	then
+		v++ -p -t "$EMU_TYPE" \
+		--platform "$PLATFORM" \
+		"$LINK_OUTPUT" \
+		-o "bin/workload-$EMU_TYPE.xclbin"
+
+		if [[ $? -ne 0 || ! -s "bin/workload-$EMU_TYPE.xclbin" ]]
+		then
+			echo -e "${RD}VCK5000 packaging failed to produce workload-$EMU_TYPE.xclbin${NC}"
+			exit 1
+		fi
 	fi
 	cd ../
 }
@@ -314,6 +349,14 @@ then
 	run_program
 fi
 
+if [[ $COMMAND == sw_emu_build ]]
+then
+	rm -rf _x
+	EMU_TYPE=sw_emu
+	compile_opencl
+	compile_kernel
+fi
+
 if [[ $COMMAND == hw ]]
 then
 	export SAT_ACCEL_ROOT="$PWD"
@@ -386,33 +429,22 @@ then
 	EMU_TYPE=hw
 	compile_kernel
 
-	echo -e "${CY}Copying Vitis HLS reports for ${VITIS_HLS_KERNEL[0]} kernel... ${NC}"
-	cp _x/workload-${VITIS_HLS_KERNEL[0]}-hw/${VITIS_HLS_KERNEL[0]}/${VITIS_HLS_KERNEL[0]}/solution/syn/report/*.rpt FPGArpt/
-
-	echo -e "${CY}Copying Vitis HLS reports for ${VITIS_HLS_KERNEL[1]} kernel... ${NC}"
-	cp _x/workload-${VITIS_HLS_KERNEL[1]}-hw/${VITIS_HLS_KERNEL[1]}/${VITIS_HLS_KERNEL[1]}/solution/syn/report/*.rpt FPGArpt/
-
-	echo -e "${CY}Copying Vitis HLS reports for ${VITIS_HLS_KERNEL[2]} kernel... ${NC}"
-	cp _x/workload-${VITIS_HLS_KERNEL[2]}-hw/${VITIS_HLS_KERNEL[2]}/${VITIS_HLS_KERNEL[2]}/solution/syn/report/*.rpt FPGArpt/
-
-	echo -e "${CY}Copying Vitis HLS reports for ${VITIS_HLS_KERNEL[3]} kernel... ${NC}"
-	cp _x/workload-${VITIS_HLS_KERNEL[3]}-hw/${VITIS_HLS_KERNEL[3]}/${VITIS_HLS_KERNEL[3]}/solution/syn/report/*.rpt FPGArpt/
-
-	echo -e "${CY}Copying Vitis HLS reports for ${VITIS_HLS_KERNEL[4]} kernel... ${NC}"
-	cp _x/workload-${VITIS_HLS_KERNEL[4]}-hw/${VITIS_HLS_KERNEL[4]}/${VITIS_HLS_KERNEL[4]}/solution/syn/report/*.rpt FPGArpt/
-
-	echo -e "${CY}Copying Vitis HLS reports for ${VITIS_HLS_KERNEL[5]} kernel... ${NC}"
-	cp _x/workload-${VITIS_HLS_KERNEL[5]}-hw/${VITIS_HLS_KERNEL[5]}/${VITIS_HLS_KERNEL[5]}/solution/syn/report/*.rpt FPGArpt/
-
-	echo -e "${CY}Copying Vitis HLS reports for ${VITIS_HLS_KERNEL[6]} kernel... ${NC}"
-	cp _x/workload-${VITIS_HLS_KERNEL[6]}-hw/${VITIS_HLS_KERNEL[6]}/${VITIS_HLS_KERNEL[6]}/solution/syn/report/*.rpt FPGArpt/
+	for i in "${!VITIS_HLS_KERNEL[@]}"
+	do
+		if [[ -n "${HLS_ONLY:-}" && "${VITIS_HLS_KERNEL[i]}" != "$HLS_ONLY" ]]
+		then
+			continue
+		fi
+		echo -e "${CY}Copying Vitis HLS reports for ${VITIS_HLS_KERNEL[i]} kernel... ${NC}"
+		cp _x/workload-${VITIS_HLS_KERNEL[i]}-hw/${VITIS_HLS_KERNEL[i]}/${VITIS_HLS_KERNEL[i]}/solution/syn/report/*.rpt FPGArpt/
+	done
 
 	exit 0
 fi
 
 if [[ $COMMAND == help || $COMMAND == -h || $COMMAND == --help ]]
 then
-	echo "Usage: $0 {hls|hw|opencl|compilecl|sw_emu|compilekernel|run|doall}"
+	echo "Usage: $0 {hls|hw|opencl|compilecl|sw_emu|sw_emu_build|compilekernel|run|doall}"
 	echo "Default platform: $PLATFORM"
 	echo "Override with PLATFORM=<platform> and CONNECTIVITY=<config>."
 	exit 0

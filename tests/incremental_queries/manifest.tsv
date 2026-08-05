@@ -1,0 +1,9 @@
+0	01_temporary_unsat.cnf
+1	02_replace_temporary_sat.cnf
+1	03_grow_permanent_sat.cnf
+0	04_keep_permanent_unsat.cnf
+1	05_reset_permanent_unit_sat.cnf
+1	06_keep_initial_unit_sat.cnf
+0	07_keep_initial_unit_unsat.cnf
+1	14_empty_activation_sat.cnf
+0	15_dynamic_activation_unsat.cnf

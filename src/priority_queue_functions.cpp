@@ -1,8 +1,9 @@
 #include "priority_queue_functions.h"
 
-void loadPositioning(pqPosition mPositioning[_FPGA_MAX_LITERALS], pqData mPriorityQueue[2][_FPGA_MAX_LITERALS], unsigned int NUM_LITERALS){
+void loadPositioning(pqPosition mPositioning[_FPGA_MAX_LITERALS], pqData mPriorityQueue[2][_FPGA_MAX_LITERALS],
+    const unsigned int* decisionDomain,
+    unsigned int NUM_LITERALS, unsigned int NUM_DOMAIN_LITERALS){
     #pragma HLS inline off
-
 
     GET_POSITION_3: for(unsigned int i = 0; i < NUM_LITERALS; i++){
         #pragma HLS loop_tripcount min=1024 max=1024
@@ -13,6 +14,22 @@ void loadPositioning(pqPosition mPositioning[_FPGA_MAX_LITERALS], pqData mPriori
         mPriorityQueue[1][i].score = 0;
 
         mPositioning[i].pos = i;
+    }
+
+    MOVE_DOMAIN_TO_FRONT: for(unsigned int i = 0; i < NUM_DOMAIN_LITERALS; i++){
+        #pragma HLS loop_tripcount min=1 max=1024
+        const unsigned int variable = decisionDomain[i];
+        const unsigned int oldPosition = mPositioning[variable-1].pos;
+        const pqData displaced = mPriorityQueue[0][i];
+        const pqData selected = mPriorityQueue[1][oldPosition];
+
+        mPriorityQueue[0][i] = selected;
+        mPriorityQueue[1][i] = selected;
+        mPositioning[variable-1].pos = i;
+
+        mPriorityQueue[0][oldPosition] = displaced;
+        mPriorityQueue[1][oldPosition] = displaced;
+        mPositioning[displaced.literal-1].pos = oldPosition;
     }
 }
 
@@ -189,7 +206,8 @@ void swapHigher(pqData mPriorityQueue[2][_FPGA_MAX_LITERALS], pqPosition mPositi
     mPriorityQueue[1][savePosition] = toMoveHigher;
 }
 
-void hideElement(hls::stream<lit>& input, pqData mPriorityQueue[2][_FPGA_MAX_LITERALS], pqPosition mPositioning[_FPGA_MAX_LITERALS], unsigned int& remainingLiterals){
+void hideElement(hls::stream<lit>& input, pqData mPriorityQueue[2][_FPGA_MAX_LITERALS],
+    pqPosition mPositioning[_FPGA_MAX_LITERALS], unsigned int& remainingLiterals){
     #pragma HLS inline off
 
     HIDE_LOOP: while(true){
@@ -202,6 +220,9 @@ void hideElement(hls::stream<lit>& input, pqData mPriorityQueue[2][_FPGA_MAX_LIT
             }
 
             pqPosition swapPosition = mPositioning[getLit-1];
+            if(swapPosition.pos >= remainingLiterals){
+                continue;
+            }
             unsigned int getRemaining = remainingLiterals-1;
         
             pqData swap = mPriorityQueue[0][swapPosition.pos];
@@ -221,7 +242,9 @@ void hideElement(hls::stream<lit>& input, pqData mPriorityQueue[2][_FPGA_MAX_LIT
     }
 }
 
-void unhideElement(hls::stream<lit>& input, pqData mPriorityQueue[2][_FPGA_MAX_LITERALS], pqPosition mPositioning[_FPGA_MAX_LITERALS], unsigned int& remainingLiterals){
+void unhideElement(hls::stream<lit>& input, pqData mPriorityQueue[2][_FPGA_MAX_LITERALS],
+    pqPosition mPositioning[_FPGA_MAX_LITERALS], const unsigned int NUM_DOMAIN_LITERALS,
+    unsigned int& remainingLiterals){
     #pragma HLS inline off
     
     UNHIDE_LOOP: while(true){
@@ -234,7 +257,8 @@ void unhideElement(hls::stream<lit>& input, pqData mPriorityQueue[2][_FPGA_MAX_L
                 break;
             }
 
-            if(mPositioning[getLit-1].pos < remainingLiterals){
+            const unsigned int position = mPositioning[getLit-1].pos;
+            if(position < remainingLiterals || position >= NUM_DOMAIN_LITERALS){
                 continue;
             }
 
@@ -313,8 +337,8 @@ void axiStreamBuffer(hls::stream<ap_axiu<32,0,0,0>>& input, hls::stream<lit>& in
         }
     }
 }
-void hide_wrapper(hls::stream<ap_axiu<32,0,0,0>>& input, pqData mPriorityQueue[2][_FPGA_MAX_LITERALS], pqPosition mPositioning[_FPGA_MAX_LITERALS], 
-    unsigned int& remainingLiterals){
+void hide_wrapper(hls::stream<ap_axiu<32,0,0,0>>& input, pqData mPriorityQueue[2][_FPGA_MAX_LITERALS],
+    pqPosition mPositioning[_FPGA_MAX_LITERALS], unsigned int& remainingLiterals){
     #pragma HLS inline off
     hls::stream<lit> intermediateStream;
     #pragma HLS stream variable=intermediateStream depth=MAX_STREAM_DEPTH
@@ -324,7 +348,8 @@ void hide_wrapper(hls::stream<ap_axiu<32,0,0,0>>& input, pqData mPriorityQueue[2
     axiStreamBuffer(input, intermediateStream);
     hideElement(intermediateStream, mPriorityQueue, mPositioning, remainingLiterals);
 }
-void unhide_wrapper(hls::stream<ap_axiu<32,0,0,0>>& input, pqData mPriorityQueue[2][_FPGA_MAX_LITERALS], pqPosition mPositioning[_FPGA_MAX_LITERALS], 
+void unhide_wrapper(hls::stream<ap_axiu<32,0,0,0>>& input, pqData mPriorityQueue[2][_FPGA_MAX_LITERALS],
+    pqPosition mPositioning[_FPGA_MAX_LITERALS], const unsigned int NUM_DOMAIN_LITERALS,
     unsigned int& remainingLiterals){
     #pragma HLS inline off
     hls::stream<lit> intermediateStream;
@@ -333,7 +358,7 @@ void unhide_wrapper(hls::stream<ap_axiu<32,0,0,0>>& input, pqData mPriorityQueue
 
     #pragma HLS dataflow
     axiStreamBuffer(input, intermediateStream);
-    unhideElement(intermediateStream, mPriorityQueue, mPositioning, remainingLiterals);
+    unhideElement(intermediateStream, mPriorityQueue, mPositioning, NUM_DOMAIN_LITERALS, remainingLiterals);
 }
 void unhide_wrapper(hls::stream<ap_axiu<32,0,0,0>>& input, pqData mPriorityQueue[2][_FPGA_MAX_LITERALS], pqPosition mPositioning[_FPGA_MAX_LITERALS], 
     const unsigned int remainingLiterals, double& multiplier, const double decayFactor, const unsigned int NUM_LITERALS){
@@ -346,3 +371,310 @@ void unhide_wrapper(hls::stream<ap_axiu<32,0,0,0>>& input, pqData mPriorityQueue
     decayEveryElement(intermediateStream, mPriorityQueue, mPositioning, remainingLiterals, multiplier, decayFactor, NUM_LITERALS);
 }
 
+unsigned int gipsatBucketIndex(unsigned int position){
+    #pragma HLS inline
+    unsigned int bucket = 0;
+    BUCKET_INDEX: while(position != 0){
+        #pragma HLS loop_tripcount min=0 max=16
+        bucket++;
+        position >>= 1;
+    }
+    return bucket;
+}
+
+void gipsatBucketPush(unsigned int variable,
+    const pqData mActivityHeap[2][_FPGA_MAX_LITERALS], const pqPosition mPositioning[_FPGA_MAX_LITERALS],
+    ap_uint<3> bucketState[_FPGA_MAX_LITERALS], unsigned int bucketNext[_FPGA_MAX_LITERALS],
+    unsigned int bucketHeads[GIPSAT_NUM_BUCKETS], unsigned int activityHeapSize,
+    unsigned int& bucketHead){
+    #pragma HLS inline
+    const unsigned int index = variable-1;
+    if(bucketState[index][0] == 0 || bucketState[index][1] != 0 || bucketState[index][2] != 0){
+        return;
+    }
+
+    const unsigned int position = mPositioning[index].pos;
+    const bool inActivityHeap = position < activityHeapSize &&
+        mActivityHeap[0][position].literal == (lit)variable;
+    const unsigned int bucket = gipsatBucketIndex(inActivityHeap ? position : activityHeapSize);
+
+    bucketNext[index] = bucketHeads[bucket];
+    bucketHeads[bucket] = variable;
+    bucketState[index][1] = 1;
+    if(bucketHead > bucket){
+        bucketHead = bucket;
+    }
+}
+
+void loadGipsatBuckets(pqPosition mPositioning[_FPGA_MAX_LITERALS],
+    ap_uint<3> bucketState[_FPGA_MAX_LITERALS], unsigned int bucketNext[_FPGA_MAX_LITERALS],
+    unsigned int bucketHeads[GIPSAT_NUM_BUCKETS], const unsigned int* decisionDomain,
+    unsigned int NUM_LITERALS, unsigned int NUM_DOMAIN_LITERALS,
+    unsigned int& bucketHead, unsigned int& activityHeapSize){
+    #pragma HLS inline off
+
+    INIT_BUCKET_VARIABLES: for(unsigned int i = 0; i < NUM_LITERALS; i++){
+        #pragma HLS loop_tripcount min=1024 max=1024
+        bucketState[i] = 0;
+        bucketNext[i] = 0;
+        mPositioning[i].pos = GIPSAT_POSITION_NONE;
+    }
+    INIT_BUCKET_HEADS: for(unsigned int i = 0; i < GIPSAT_NUM_BUCKETS; i++){
+        #pragma HLS unroll
+        bucketHeads[i] = 0;
+    }
+
+    bucketHead = 0;
+    activityHeapSize = 0;
+    LOAD_BUCKET_DOMAIN: for(unsigned int i = 0; i < NUM_DOMAIN_LITERALS; i++){
+        #pragma HLS loop_tripcount min=1 max=1024
+        const unsigned int variable = decisionDomain[i];
+        bucketState[variable-1][0] = 1;
+        bucketNext[variable-1] = bucketHeads[0];
+        bucketHeads[0] = variable;
+        bucketState[variable-1][1] = 1;
+    }
+}
+
+void reloadGipsatBuckets(const pqData mActivityHeap[2][_FPGA_MAX_LITERALS],
+    const pqPosition mPositioning[_FPGA_MAX_LITERALS],
+    ap_uint<3> bucketState[_FPGA_MAX_LITERALS], unsigned int bucketNext[_FPGA_MAX_LITERALS],
+    unsigned int bucketHeads[GIPSAT_NUM_BUCKETS], const unsigned int* decisionDomain,
+    unsigned int NUM_LITERALS, unsigned int NUM_DOMAIN_LITERALS,
+    unsigned int activityHeapSize, unsigned int& bucketHead){
+    #pragma HLS inline off
+
+    RELOAD_BUCKET_VARIABLES: for(unsigned int i = 0; i < NUM_LITERALS; i++){
+        #pragma HLS loop_tripcount min=1024 max=1024
+        bucketState[i] = 0;
+        bucketNext[i] = 0;
+    }
+    RELOAD_BUCKET_HEADS: for(unsigned int i = 0; i < GIPSAT_NUM_BUCKETS; i++){
+        #pragma HLS unroll
+        bucketHeads[i] = 0;
+    }
+    bucketHead = GIPSAT_NUM_BUCKETS;
+    RELOAD_BUCKET_DOMAIN: for(unsigned int i = 0; i < NUM_DOMAIN_LITERALS; i++){
+        #pragma HLS loop_tripcount min=1 max=1024
+        const unsigned int variable = decisionDomain[i];
+        bucketState[variable-1][0] = 1;
+        gipsatBucketPush(variable, mActivityHeap, mPositioning, bucketState,
+            bucketNext, bucketHeads, activityHeapSize, bucketHead);
+    }
+}
+
+lit gipsatBucketPop(ap_uint<3> bucketState[_FPGA_MAX_LITERALS],
+    const unsigned int bucketNext[_FPGA_MAX_LITERALS],
+    unsigned int bucketHeads[GIPSAT_NUM_BUCKETS], unsigned int& bucketHead){
+    #pragma HLS inline
+    POP_AVAILABLE_BUCKET_LITERAL: while(true){
+        #pragma HLS loop_tripcount min=1 max=1024
+        FIND_NONEMPTY_BUCKET: while(bucketHead < GIPSAT_NUM_BUCKETS && bucketHeads[bucketHead] == 0){
+            #pragma HLS loop_tripcount min=0 max=17
+            bucketHead++;
+        }
+        if(bucketHead == GIPSAT_NUM_BUCKETS){
+            return pq::DOMAIN_EXHAUSTED;
+        }
+
+        const unsigned int variable = bucketHeads[bucketHead];
+        bucketHeads[bucketHead] = bucketNext[variable-1];
+        bucketState[variable-1][1] = 0;
+        if(bucketState[variable-1][2] == 0){
+            return variable;
+        }
+    }
+}
+
+void gipsatBumpActivity(hls::stream<lit>& input,
+    pqData mActivityHeap[2][_FPGA_MAX_LITERALS], pqPosition mPositioning[_FPGA_MAX_LITERALS],
+    unsigned int& activityHeapSize, double& multiplier, const double decayFactor){
+    #pragma HLS inline off
+    BUMP_ACTIVITY: while(true){
+        #pragma HLS loop_tripcount min=32 max=32
+        lit variable;
+        if(input.read_nb(variable)){
+            if(variable == pq::EXIT){
+                break;
+            }
+            variable = abs(variable);
+            const unsigned int index = variable-1;
+            const unsigned int position = mPositioning[index].pos;
+            const bool present = position < activityHeapSize &&
+                mActivityHeap[0][position].literal == variable;
+            pqData bumped = present ? mActivityHeap[0][position] : (pqData){.score=0,.literal=variable};
+            bumped.score += multiplier;
+            const unsigned int insertPosition = present ? position : activityHeapSize++;
+            mPositioning[index].pos = insertPosition;
+            mActivityHeap[0][insertPosition] = bumped;
+            mActivityHeap[1][insertPosition] = bumped;
+            swapHigher(mActivityHeap, mPositioning, bumped, insertPosition);
+
+            if(bumped.score > 1e100){
+                RESCALE_ACTIVITY: for(unsigned int i = 0; i < activityHeapSize; i++){
+                    #pragma HLS loop_tripcount min=1 max=1024
+                    mActivityHeap[0][i].score *= 1e-100;
+                    mActivityHeap[1][i].score *= 1e-100;
+                }
+                multiplier *= 1e-100;
+            }
+        }
+    }
+    multiplier *= 1/decayFactor;
+}
+
+void gipsatBumpActivityWrapper(hls::stream<ap_axiu<32,0,0,0>>& input,
+    pqData mActivityHeap[2][_FPGA_MAX_LITERALS], pqPosition mPositioning[_FPGA_MAX_LITERALS],
+    unsigned int& activityHeapSize, double& multiplier, const double decayFactor){
+    #pragma HLS inline off
+    hls::stream<lit> intermediateStream;
+    #pragma HLS stream variable=intermediateStream depth=_FPGA_MAX_LEARN_ELE
+    #pragma HLS dataflow
+    axiStreamBuffer(input, intermediateStream);
+    gipsatBumpActivity(intermediateStream, mActivityHeap, mPositioning,
+        activityHeapSize, multiplier, decayFactor);
+}
+
+void gipsatBucketUnhide(hls::stream<lit>& input,
+    const pqData mActivityHeap[2][_FPGA_MAX_LITERALS], const pqPosition mPositioning[_FPGA_MAX_LITERALS],
+    ap_uint<3> bucketState[_FPGA_MAX_LITERALS], unsigned int bucketNext[_FPGA_MAX_LITERALS],
+    unsigned int bucketHeads[GIPSAT_NUM_BUCKETS], unsigned int activityHeapSize,
+    unsigned int& bucketHead){
+    #pragma HLS inline off
+    UNHIDE_BUCKET: while(true){
+        #pragma HLS loop_tripcount min=32 max=32
+        lit variable;
+        if(input.read_nb(variable)){
+            if(variable == pq::EXIT){
+                break;
+            }
+            variable = abs(variable);
+            bucketState[variable-1][2] = 0;
+            gipsatBucketPush(variable, mActivityHeap, mPositioning, bucketState,
+                bucketNext, bucketHeads, activityHeapSize, bucketHead);
+        }
+    }
+}
+
+void gipsatBucketUnhideWrapper(hls::stream<ap_axiu<32,0,0,0>>& input,
+    const pqData mActivityHeap[2][_FPGA_MAX_LITERALS], const pqPosition mPositioning[_FPGA_MAX_LITERALS],
+    ap_uint<3> bucketState[_FPGA_MAX_LITERALS], unsigned int bucketNext[_FPGA_MAX_LITERALS],
+    unsigned int bucketHeads[GIPSAT_NUM_BUCKETS], unsigned int activityHeapSize,
+    unsigned int& bucketHead){
+    #pragma HLS inline off
+    hls::stream<lit> intermediateStream;
+    #pragma HLS stream variable=intermediateStream depth=MAX_STREAM_DEPTH
+    #pragma HLS bind_storage variable=intermediateStream type=FIFO impl=URAM
+    #pragma HLS dataflow
+    axiStreamBuffer(input, intermediateStream);
+    gipsatBucketUnhide(intermediateStream, mActivityHeap, mPositioning, bucketState,
+        bucketNext, bucketHeads, activityHeapSize, bucketHead);
+}
+
+void gipsatBucketHide(hls::stream<lit>& input,
+    ap_uint<3> bucketState[_FPGA_MAX_LITERALS]){
+    #pragma HLS inline off
+    HIDE_BUCKET: while(true){
+        #pragma HLS loop_tripcount min=1 max=1024
+        lit variable;
+        if(input.read_nb(variable)){
+            if(variable == pq::EXIT){
+                break;
+            }
+            variable = abs(variable);
+            if(bucketState[variable-1][0] != 0){
+                bucketState[variable-1][2] = 1;
+            }
+        }
+    }
+}
+
+void gipsatBucketHideWrapper(hls::stream<ap_axiu<32,0,0,0>>& input,
+    ap_uint<3> bucketState[_FPGA_MAX_LITERALS]){
+    #pragma HLS inline off
+    hls::stream<lit> intermediateStream;
+    #pragma HLS stream variable=intermediateStream depth=1024
+    #pragma HLS dataflow
+    axiStreamBuffer(input, intermediateStream);
+    gipsatBucketHide(intermediateStream, bucketState);
+}
+
+static pqData gipsatActivity(const pqData mActivityHeap[2][_FPGA_MAX_LITERALS],
+    const pqPosition mPositioning[_FPGA_MAX_LITERALS], unsigned int activityHeapSize,
+    unsigned int variable){
+    #pragma HLS inline
+    const unsigned int position = mPositioning[variable-1].pos;
+    if(position < activityHeapSize && mActivityHeap[0][position].literal == (lit)variable){
+        return mActivityHeap[0][position];
+    }
+    return (pqData){.score=0,.literal=(lit)variable};
+}
+
+static void gipsatHeapPushSingle(pqData heap[_FPGA_MAX_LITERALS],
+    unsigned int newPosition[_FPGA_MAX_LITERALS], pqData value, unsigned int size){
+    #pragma HLS inline
+    unsigned int position = size;
+    PUSH_SINGLE_HEAP: while(position != 0){
+        #pragma HLS loop_tripcount min=0 max=32
+        const unsigned int parentPosition = (position-1)>>1;
+        const pqData parent = heap[parentPosition];
+        if(parent.score >= value.score){
+            break;
+        }
+        heap[position] = parent;
+        newPosition[parent.literal-1] = position;
+        position = parentPosition;
+    }
+    heap[position] = value;
+    newPosition[value.literal-1] = position;
+}
+
+void gipsatSwitchToHeap(const unsigned int* decisionDomain,
+    pqData mPriorityQueue[2][_FPGA_MAX_LITERALS], pqPosition mPositioning[_FPGA_MAX_LITERALS],
+    const ap_uint<3> bucketState[_FPGA_MAX_LITERALS], unsigned int newPosition[_FPGA_MAX_LITERALS],
+    unsigned int NUM_LITERALS, unsigned int NUM_DOMAIN_LITERALS,
+    unsigned int activityHeapSize, unsigned int& remainingLiterals){
+    #pragma HLS inline off
+
+    CLEAR_NEW_POSITIONS: for(unsigned int i = 0; i < NUM_LITERALS; i++){
+        #pragma HLS loop_tripcount min=1024 max=1024
+        newPosition[i] = GIPSAT_POSITION_NONE;
+    }
+
+    unsigned int active = 0;
+    BUILD_ACTIVE_HEAP: for(unsigned int i = 0; i < NUM_DOMAIN_LITERALS; i++){
+        #pragma HLS loop_tripcount min=1 max=1024
+        const unsigned int variable = decisionDomain[i];
+        if(bucketState[variable-1][1] != 0 && bucketState[variable-1][2] == 0){
+            const pqData value = gipsatActivity(mPriorityQueue, mPositioning, activityHeapSize, variable);
+            gipsatHeapPushSingle(mPriorityQueue[1], newPosition, value, active++);
+        }
+    }
+    remainingLiterals = active;
+
+    APPEND_HIDDEN_DOMAIN: for(unsigned int i = 0; i < NUM_DOMAIN_LITERALS; i++){
+        #pragma HLS loop_tripcount min=1 max=1024
+        const unsigned int variable = decisionDomain[i];
+        if(bucketState[variable-1][1] == 0 || bucketState[variable-1][2] != 0){
+            const pqData value = gipsatActivity(mPriorityQueue, mPositioning, activityHeapSize, variable);
+            mPriorityQueue[1][active] = value;
+            newPosition[variable-1] = active++;
+        }
+    }
+
+    APPEND_OUTSIDE_DOMAIN: for(unsigned int variable = 1; variable <= NUM_LITERALS; variable++){
+        #pragma HLS loop_tripcount min=1024 max=1024
+        if(newPosition[variable-1] == GIPSAT_POSITION_NONE){
+            const pqData value = gipsatActivity(mPriorityQueue, mPositioning, activityHeapSize, variable);
+            mPriorityQueue[1][active] = value;
+            newPosition[variable-1] = active++;
+        }
+    }
+
+    COMMIT_DECISION_HEAP: for(unsigned int i = 0; i < NUM_LITERALS; i++){
+        #pragma HLS loop_tripcount min=1024 max=1024
+        const pqData value = mPriorityQueue[1][i];
+        mPriorityQueue[0][i] = value;
+        mPositioning[value.literal-1].pos = i;
+    }
+}

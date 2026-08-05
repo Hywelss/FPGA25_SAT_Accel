@@ -7,7 +7,8 @@ void discover(hls::stream<colorAssignment>& toCommitStream, hls::stream<bcpPacke
     lit answerStack[_FPGA_MAX_LITERALS], literalMetaData lmd[_FPGA_MAX_LITERALS], literalMinimizeMetaData lmmd[_FPGA_PARALLEL_MINIMIZE][_FPGA_MAX_LITERALS],
     cls unitByCls[_FPGA_MAX_LITERALS],
     unsigned int& answerStackHeight, const unsigned int decisionLevel, unsigned int& fixedDecisionStackHeight,
-    const lit topLiteral, const bool useFlipped, const ap_uint<1> POSITIVE_LIT_PHASE_VAL, bool& skipCPUOnce){
+    const lit topLiteral, const bool useFlipped, const bool forceLiteralPhase,
+    const ap_uint<1> POSITIVE_LIT_PHASE_VAL, bool& skipCPUOnce){
     #pragma HLS inline off
 
     unsigned int duplicateCount = 0;
@@ -19,7 +20,7 @@ void discover(hls::stream<colorAssignment>& toCommitStream, hls::stream<bcpPacke
         checkUndecided(toCommitStream,
             answerStack, lmd, lmmd, unitByCls,
             answerStackHeight, duplicateCount, topLiteral,
-            fixedDecisionStackHeight, decisionLevel, POSITIVE_LIT_PHASE_VAL);
+            fixedDecisionStackHeight, decisionLevel, forceLiteralPhase, POSITIVE_LIT_PHASE_VAL);
     }else{
         lmd[abs(litToCheck.literal)-1] = litToCheck.lmd;
         for(unsigned int j = 0; j < _FPGA_PARALLEL_MINIMIZE; j++){
@@ -348,7 +349,8 @@ void controlSink(hls::stream<bcpPacket>& toDecide,
     hls::stream<clsStateControlPacket>& toControlSink,
     hls::stream<int>& duplicateCountStream,
     hls::stream<bool>& stopSending, hls::stream<ap_axiu<96,0,0,0>>& clauseStoreInputStream1,
-    myStream<cls,64,7>& unsatClauses, bool& doBackTrack, 
+    myStream<cls,64,7>& unsatClauses, bool& doBackTrack,
+    const bool mInDomain[_FPGA_MAX_LITERALS],
     const unsigned int decisionLevel, const unsigned int fixedDecisionStackHeight, const bool firstIteration,
     bool& flushSignal){
     #pragma HLS inline off
@@ -402,7 +404,8 @@ void controlSink(hls::stream<bcpPacket>& toDecide,
                         doBackTrack = true;
                         writeOnce = true;
                     }
-                }else if(ctrlPkt.pktType == solverCode::UNIT){// && !doBackTrack){
+                }else if(ctrlPkt.pktType == solverCode::UNIT &&
+                         domainAllowsPropagation(ctrlPkt.bcp.literalUnitted, decisionLevel, mInDomain)){
                     ap_axiu<96,0,0,0> sendClauseInputCommand;
                     sendClauseInputCommand.data.range(95,64) = 0;
                     sendClauseInputCommand.data.range(63,32) = 0;
@@ -458,12 +461,13 @@ void controlSink(hls::stream<bcpPacket>& toDecide,
 
 void bcp_discover_dataflow_wrapper(clsState clsStates[_FPGA_CLS_STATES_PARTITION][_FPGA_MAX_CLAUSES/_FPGA_CLS_STATES_PARTITION],
     lit answerStack[_FPGA_MAX_LITERALS], literalMetaData lmd[_FPGA_MAX_LITERALS], literalMinimizeMetaData lmmd[_FPGA_PARALLEL_MINIMIZE][_FPGA_MAX_LITERALS],
-    cls unitByCls[_FPGA_MAX_LITERALS],
+    cls unitByCls[_FPGA_MAX_LITERALS], const bool mInDomain[_FPGA_MAX_LITERALS],
     const ap_uint<512> litStore[_FPGA_MAX_LITERAL_ELEMENTS/16],
     unsigned int& answerStackHeight,
     myStream<cls,64,7>& unsatClauses, unsigned int& fixedDecisionStackHeight, lit& literalCommit, bool& doBackTrack,
     const lit topLiteral, const flippedLiteral litToCheck, const unsigned int fixedDecisionStackHeightCopy,
-    const unsigned int decisionLevel, const bool useFlipped, const bool firstIteration, const unsigned int LITERAL_PAGE_SIZE, const ap_uint<1> POSITIVE_LIT_PHASE_VAL,
+    const unsigned int decisionLevel, const bool useFlipped, const bool firstIteration,
+    const bool forceLiteralPhase, const unsigned int LITERAL_PAGE_SIZE, const ap_uint<1> POSITIVE_LIT_PHASE_VAL,
     ap_uint<64> litStoreAccessStats[4], volatile uint64_t store[2], hls::stream<ap_axiu<32,0,0,0>>& pqHandlerInput,
     hls::stream<ap_axiu<96,0,0,0>>& clauseStoreInputStream1, hls::stream<ap_axiu<32,0,0,0>>& clauseStoreOutputStream){
 
@@ -523,7 +527,7 @@ void bcp_discover_dataflow_wrapper(clsState clsStates[_FPGA_CLS_STATES_PARTITION
         duplicateCountStream, clauseStoreOutputStream,
         litToCheck, answerStack, lmd, lmmd, unitByCls,
         answerStackHeight, decisionLevel, fixedDecisionStackHeight, topLiteral,
-        useFlipped, POSITIVE_LIT_PHASE_VAL, skipCPUOnce);
+        useFlipped, forceLiteralPhase, POSITIVE_LIT_PHASE_VAL, skipCPUOnce);
 
     colorStream(toStateUpdater, toColorStream, &stopSending, litStore, LITERAL_PAGE_SIZE, &literalCommit, 0, litStoreAccessStats);
 
@@ -537,6 +541,7 @@ void bcp_discover_dataflow_wrapper(clsState clsStates[_FPGA_CLS_STATES_PARTITION
     controlSink(toDecide, toControlSink,
         duplicateCountStream,
         stopSending, clauseStoreInputStream1, unsatClauses, doBackTrack,
+        mInDomain,
         decisionLevel, fixedDecisionStackHeightCopy, firstIterationCopy,
         flushSignal);
 

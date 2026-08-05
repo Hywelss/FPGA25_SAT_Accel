@@ -20,11 +20,10 @@ Stage A prioritizes functional correctness over incremental-query performance.
 - Run XRT tools from a process that has inherited the `render` group. After a
   recent group-membership change, start a new login session or use
   `sg render -c '<command>'`.
-- Check the card with `xbutil examine`. If XRT still reports no devices in the
-  correct device-group context, locate the VCK5000 management and user PCIe
-  functions with `lspci`, reset the management function with
-  `xbmgmt reset --device <management-BDF>`, and examine again. On this machine
-  the management BDF is `0000:91:00.0` and the user BDF is `0000:91:00.1`.
+- Check the card with `xbutil examine`. If XRT reports that a compute unit was
+  deadlocked, reset the user function without `sudo` using
+  `xbutil reset --device <user-BDF>`, then examine again. On this machine the
+  management BDF is `0000:91:00.0` and the user BDF is `0000:91:00.1`.
 - Loading an xclbin through the host program is a runtime operation; it is not
   a persistent card flash.
 
@@ -34,8 +33,10 @@ Stage A prioritizes functional correctness over incremental-query performance.
    UNSAT DIMACS inputs.
 2. A one-shot backend can submit `T + frame clauses + temporary clauses +
    assumptions-as-unit-clauses` to SAT-Accel.
-3. SAT returns the model data required by rIC3. UNSAT may initially return the
-   complete assumption set as a valid, non-minimal core.
+3. SAT returns the model data required by rIC3. UNSAT returns the actual
+   assumption core traced by the FPGA from the final conflict and propagation
+   reasons. An extraction failure is an error; it never falls back to the full
+   assumption set.
 4. Small rIC3 models reach the same final verdict as the GipSAT baseline.
 
 ## Build only the Stage A host
@@ -66,19 +67,21 @@ export INDUCTOR_XRT_ROOT=/opt/xilinx/xrt
 
 Each IC3 query is submitted as a complete one-shot DIMACS formula containing
 the transition relation, permanent frame lemmas, temporary clauses, and
-assumptions as unit clauses. SAT models are returned to rIC3. For UNSAT, Stage
-A conservatively marks every assumption as part of the core.
+assumptions as unit clauses. SAT models are returned to rIC3. For UNSAT, the
+FPGA returns only assumptions reached by tracing the final conflict through
+the assignment trail and reason clauses.
 
-For differential checking and query capture, enable:
+For query capture, enable:
 
 ```bash
-export INDUCTOR_SAT_ACCEL_VERIFY=1
 export INDUCTOR_SAT_ACCEL_CAPTURE_DIR=/path/to/capture
 ```
 
-Verification solves the submitted formula independently with CaDiCaL and
-checks every SAT model against every submitted clause. Capture writes matching
-`.cnf` and `.result` files without overwriting an existing query.
+The production interface does not invoke a CPU SAT solver. It validates each
+SAT model against the submitted clauses and validates every UNSAT-core literal
+against the input assumptions. Capture writes matching `.cnf` and `.result`
+files without overwriting an existing query. Software-emulation tests use
+fixed expected verdicts and cores; they do not invoke a CPU SAT solver.
 
 ## Single-session query replay
 
@@ -141,3 +144,32 @@ Enabling the online session for the same `mult2.aig` path reduced end-to-end
 time from about 12.43 seconds to 2.55 seconds while preserving the seven query
 verdicts and final UNSAT result. This measures avoided host/xclbin startup; it
 does not claim kernel-state reuse.
+
+## Unified hardware checkpoint (2026-08-06)
+
+The domain-restricted decisions, bucket-based variable selection, temporary
+clause reuse and cleanup, activation-clause learning, and FPGA UNSAT-core
+extraction were built together for VCK5000. Before the hardware build:
+
+- ten focused C++ tests passed;
+- the nine-query incremental software-emulation manifest passed;
+- all five cross-query reuse manifests passed;
+- four UNSAT-core software-emulation cases passed; and
+- the rIC3 `cnt1e` and `mult2` closed loops passed through the FPGA software-
+  emulation path without a CPU SAT fallback.
+
+The hardware link and packaging completed with zero VPL check errors. The
+resulting artifacts are:
+
+```text
+test.real.out       0d94cdf9e4ede494971521a74756460eef8ef2440c393df5d5ba2c1c43bca407
+workload-hw.xsa     07f0252f38186adb98fbab25737ef1578aac0afcdbcb5d0bfe659bff8e101340
+workload-hw.xclbin  e7b1828e6fdc61fe87faf9886653c8f44d7c95d7a1c08c7fc7e812448d619822
+```
+
+The routed design did not meet the requested 220 MHz data clock. Its worst
+setup slack was -1.299 ns against a 4.500 ns period, so Vitis selected 172 MHz.
+The worst path is the original SAT-Accel `colorStream` page-walk index update,
+not the added domain, bucket, temporary-clause, or UNSAT-core logic. Hold
+timing passed. This checkpoint is functionally complete but remains the
+pre-frequency-optimization baseline; it must not be reported as 220 MHz.

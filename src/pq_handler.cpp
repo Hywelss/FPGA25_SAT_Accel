@@ -5,32 +5,63 @@
 #include "priority_queue_functions.h"
 
 extern "C"{
-void pqHandler(int num_literals, double decay, hls::stream<ap_axiu<32,0,0,0>>& input, hls::stream<ap_axiu<32,0,0,0>>& output){
+void pqHandler(const unsigned int* decision_domain, int num_literals, int num_domain_literals,
+    double decay, bool session_reset,
+    hls::stream<ap_axiu<32,0,0,0>>& input, hls::stream<ap_axiu<32,0,0,0>>& output){
 
     #pragma HLS INTERFACE axis port=input
     #pragma HLS INTERFACE axis port=output
 
+    #pragma HLS INTERFACE m_axi port=decision_domain offset=slave bundle=gmemDomain latency=40
+    #pragma HLS INTERFACE s_axilite port=decision_domain
     #pragma HLS INTERFACE s_axilite port=num_literals
+    #pragma HLS INTERFACE s_axilite port=num_domain_literals
     #pragma HLS INTERFACE s_axilite port=decay
+    #pragma HLS INTERFACE s_axilite port=session_reset
 
 	#pragma HLS INTERFACE s_axilite port=return
 
-    pqData mPriorityQueue[2][_FPGA_MAX_LITERALS];
+    static pqData mPriorityQueue[2][_FPGA_MAX_LITERALS];
     #pragma HLS array_partition variable=mPriorityQueue dim=1 complete
     #pragma HLS aggregate variable=mPriorityQueue compact=auto
     #pragma HLS bind_storage variable=mPriorityQueue type=RAM_S2P impl=URAM latency=1
 
-    pqPosition mPositioning[_FPGA_MAX_LITERALS];
+    static pqPosition mPositioning[_FPGA_MAX_LITERALS];
     #pragma HLS bind_storage variable=mPositioning type=RAM_S2P impl=URAM latency=1
 
-    unsigned int remainingLiterals = num_literals;
+    static ap_uint<3> bucketState[_FPGA_MAX_LITERALS];
+    #pragma HLS bind_storage variable=bucketState type=RAM_S2P impl=BRAM latency=1
+
+    static unsigned int bucketNext[_FPGA_MAX_LITERALS];
+    #pragma HLS bind_storage variable=bucketNext type=RAM_S2P impl=BRAM latency=1
+
+    static unsigned int bucketHeads[GIPSAT_NUM_BUCKETS];
+    #pragma HLS array_partition variable=bucketHeads complete
+
+    unsigned int remainingLiterals = num_domain_literals;
 
     unsigned int NUM_LITERALS = num_literals;
 
-    double multiplier = 1.0;
+    static double multiplier = 1.0;
     double decayFactor = decay;
 
-    loadPositioning(mPositioning, mPriorityQueue, NUM_LITERALS);
+    static unsigned int bucketHead = 0;
+    static unsigned int activityHeapSize = 0;
+    static unsigned int previousNumLiterals = 0;
+    bool useBucket = true;
+    if(session_reset){
+        multiplier = 1.0;
+        loadGipsatBuckets(mPositioning, bucketState, bucketNext, bucketHeads,
+            decision_domain, NUM_LITERALS, num_domain_literals, bucketHead, activityHeapSize);
+    }else{
+        INITIALIZE_NEW_POSITIONS: for(unsigned int i = previousNumLiterals; i < NUM_LITERALS; i++){
+            #pragma HLS loop_tripcount min=0 max=1024
+            mPositioning[i].pos = GIPSAT_POSITION_NONE;
+        }
+        reloadGipsatBuckets(mPriorityQueue, mPositioning, bucketState, bucketNext, bucketHeads,
+            decision_domain, NUM_LITERALS, num_domain_literals, activityHeapSize, bucketHead);
+    }
+    previousNumLiterals = NUM_LITERALS;
 
     int keepState = -1;
     while(true){
@@ -48,6 +79,21 @@ void pqHandler(int num_literals, double decay, hls::stream<ap_axiu<32,0,0,0>>& i
         if(code == pq::EXIT){
             break;
         }else if(code == pq::GET_UNDECIDED){
+            if(useBucket){
+                GET_BUCKET_UNDECIDED: while(true){
+                    #pragma HLS loop_tripcount min=8 max=8
+                    ap_axiu<32,0,0,0> send;
+                    send.data = gipsatBucketPop(bucketState, bucketNext, bucketHeads, bucketHead);
+                    output.write(send);
+                    ap_wait();
+                    read = input.read();
+                    code = read.data;
+                    if(code == pq::EXIT){
+                        break;
+                    }
+                }
+                continue;
+            }
             hls::stream<lit> removeLiterals;
             unsigned int streamSize = 0;
             #pragma HLS stream variable=removeLiterals depth=1024
@@ -62,6 +108,16 @@ void pqHandler(int num_literals, double decay, hls::stream<ap_axiu<32,0,0,0>>& i
                         keepState = pq::GET_UNDECIDED;
                     }
                     break;
+                }
+
+                if(inc >= remainingLiterals){
+                    ap_axiu<32,0,0,0> send;
+                    send.data = pq::DOMAIN_EXHAUSTED;
+                    output.write(send);
+                    ap_wait();
+                    read = input.read();
+                    code = read.data;
+                    continue;
                 }
 
                 lit getUndecided = mPriorityQueue[0][inc].literal;
@@ -81,9 +137,30 @@ void pqHandler(int num_literals, double decay, hls::stream<ap_axiu<32,0,0,0>>& i
             removeLiterals.write(pq::EXIT);
             hideElement(removeLiterals, mPriorityQueue, mPositioning, remainingLiterals);
         }else if(code == pq::UPDATE){
-            unhide_wrapper(input, mPriorityQueue, mPositioning, remainingLiterals, multiplier, decayFactor, NUM_LITERALS);
+            if(useBucket){
+                gipsatBumpActivityWrapper(input, mPriorityQueue, mPositioning,
+                    activityHeapSize, multiplier, decayFactor);
+            }else{
+                unhide_wrapper(input, mPriorityQueue, mPositioning, remainingLiterals, multiplier, decayFactor, NUM_LITERALS);
+            }
         }else if(code == pq::UNHIDE_ELE){
-            unhide_wrapper(input, mPriorityQueue, mPositioning, remainingLiterals);
+            if(useBucket){
+                gipsatBucketUnhideWrapper(input, mPriorityQueue, mPositioning,
+                    bucketState, bucketNext, bucketHeads, activityHeapSize, bucketHead);
+            }else{
+                unhide_wrapper(input, mPriorityQueue, mPositioning, num_domain_literals, remainingLiterals);
+            }
+        }else if(code == pq::HIDE_ELE){
+            if(useBucket){
+                gipsatBucketHideWrapper(input, bucketState);
+            }else{
+                hide_wrapper(input, mPriorityQueue, mPositioning, remainingLiterals);
+            }
+        }else if(code == pq::SWITCH_TO_HEAP && useBucket){
+            gipsatSwitchToHeap(decision_domain, mPriorityQueue, mPositioning,
+                bucketState, bucketNext, NUM_LITERALS, num_domain_literals,
+                activityHeapSize, remainingLiterals);
+            useBucket = false;
         }
     }
 

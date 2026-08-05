@@ -6,17 +6,42 @@
 
 extern "C"{
 void location_handler(
+    const unsigned int* clsToLitStorePos, const unsigned int* litToClsStorePos,
+    const unsigned int clauseElements, const unsigned int literalElements,
+    const bool sessionReset,
     hls::stream<ap_axiu<64,0,0,0>>& locationInputStream, hls::stream<ap_axiu<32,0,0,0>>& locationOutputStream){
 
 	#pragma HLS INTERFACE axis port=locationInputStream
     #pragma HLS INTERFACE axis port=locationOutputStream
+	#pragma HLS INTERFACE m_axi port=clsToLitStorePos offset=slave bundle=gmemLocation latency=40
+	#pragma HLS INTERFACE m_axi port=litToClsStorePos offset=slave bundle=gmemLocation latency=40
+	#pragma HLS INTERFACE s_axilite port=clsToLitStorePos
+	#pragma HLS INTERFACE s_axilite port=litToClsStorePos
+	#pragma HLS INTERFACE s_axilite port=clauseElements
+	#pragma HLS INTERFACE s_axilite port=literalElements
+	#pragma HLS INTERFACE s_axilite port=sessionReset
 	#pragma HLS INTERFACE s_axilite port=return
 
-    ap_uint<128> mClsToLitStorePos[_FPGA_MAX_LITERAL_ELEMENTS/4];
+    static ap_uint<128> mClsToLitStorePos[_FPGA_MAX_LITERAL_ELEMENTS/4];
     #pragma HLS bind_storage variable=mClsToLitStorePos type=RAM_S2P impl=URAM latency=2
 
-    ap_uint<128> mLitToClsStorePos[_FPGA_MAX_LITERAL_ELEMENTS/4];
+    static ap_uint<128> mLitToClsStorePos[_FPGA_MAX_LITERAL_ELEMENTS/4];
     #pragma HLS bind_storage variable=mLitToClsStorePos type=RAM_S2P impl=URAM latency=2
+
+    if(sessionReset){
+        COPY_CLS_TO_LIT_POS: for(unsigned int i = 0; i < clauseElements; i++){
+            #pragma HLS loop_tripcount min=1024 max=1024
+            ap_uint<128> line = mClsToLitStorePos[i/4];
+            line.range(32*(i%4)+31,32*(i%4)) = clsToLitStorePos[i];
+            mClsToLitStorePos[i/4] = line;
+        }
+        COPY_LIT_TO_CLS_POS: for(unsigned int i = 0; i < literalElements; i++){
+            #pragma HLS loop_tripcount min=1024 max=1024
+            ap_uint<128> line = mLitToClsStorePos[i/4];
+            line.range(32*(i%4)+31,32*(i%4)) = litToClsStorePos[i];
+            mLitToClsStorePos[i/4] = line;
+        }
+    }
 
     LOCATION_HANDLE_LOOP: while(true){
         #pragma HLS loop_tripcount min=16 max=16

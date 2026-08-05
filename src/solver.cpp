@@ -3,6 +3,10 @@
 #include "learn.h"
 #include "backtrack.h"
 #include "copy_in.h"
+#include "fixed_literal.h"
+#include "manage.h"
+#include "temporary_clause_tracker.h"
+#include "unsat_core.h"
 
 void sendTime(hls::stream<ap_axiu<64,0,0,0>>& timerValueStream, hls::stream<ap_axiu<1,0,0,0>>& conditionStream, 
     const unsigned int code, volatile uint64_t* store){
@@ -85,8 +89,141 @@ void copyStats(ap_uint<64>* learnedStats, ap_uint<64>* longestClause, ap_uint<64
     memcpy(miscCounters+7, copyMe, sizeof(int) * 43);
 }
 
+bool installQueryClauses(const lit* queryClauseStore,
+    const clauseMetaData* queryCmd, unsigned int firstClause, unsigned int endClause,
+    unsigned int permanentClauseCount,
+    clsState clsStates[_FPGA_CLS_STATES_PARTITION][_FPGA_MAX_CLAUSES/_FPGA_CLS_STATES_PARTITION],
+    ap_uint<512> litStore[_FPGA_MAX_LITERAL_ELEMENTS/16],
+    literalMetaData lmd[_FPGA_MAX_LITERALS],
+    lit answerStack[_FPGA_MAX_LITERALS], unsigned int& fixedDecisionStackHeight,
+    unsigned int& permanentRootCount, bool& permanentFormulaUnsat,
+    mmuStream<unsigned int, _MAX_PAGES_LIT_STORE_>& freeLitPageAddresses,
+    ap_uint<1> temporaryClauseMask[_FPGA_MAX_CLAUSES], unsigned int& temporaryClauseCount,
+    unsigned int numLiterals, unsigned int literalPageSize, int& error,
+    hls::stream<ap_axiu<96,0,0,0>>& clauseStoreInputStream1,
+    hls::stream<ap_axiu<32,0,0,0>>& clauseStoreOutputStream1){
+    #pragma HLS inline off
+
+    bool queryUnsat = false;
+    INSTALL_QUERY_CLAUSES: for(unsigned int sourceID = firstClause; sourceID < endClause; sourceID++){
+        #pragma HLS loop_tripcount min=0 max=1024
+        const clauseMetaData source = queryCmd[sourceID];
+        if(source.numElements > _FPGA_MAX_LEARN_ELE){
+            error = -2;
+            return false;
+        }
+
+        lit sourceClause[_FPGA_MAX_LEARN_ELE];
+        #pragma HLS bind_storage variable=sourceClause type=RAM_S2P impl=auto latency=1
+        lit reducedClause[_FPGA_MAX_LEARN_ELE];
+        #pragma HLS bind_storage variable=reducedClause type=RAM_S2P impl=auto latency=1
+        READ_QUERY_CLAUSE: for(unsigned int i = 0; i < source.numElements; i++){
+            #pragma HLS loop_tripcount min=1 max=1024
+            #pragma HLS pipeline II=1
+            sourceClause[i] = queryClauseStore[source.addressStart + i];
+        }
+
+        unsigned int clauseLength = 0;
+        bool satisfiedAtRoot = false;
+        REDUCE_QUERY_CLAUSE: for(unsigned int i = 0; i < source.numElements; i++){
+            #pragma HLS loop_tripcount min=1 max=1024
+            #pragma HLS pipeline II=1
+            const lit literal = sourceClause[i];
+            const literalMetaData metadata = lmd[abs(literal)-1];
+            if(LMD_IS_IN_STACK(metadata.compactlmd) && LMD_DEC_LVL(metadata.compactlmd) == 0){
+                const lit assigned = answerStack[(unsigned int)LMD_INSERT_LVL(metadata.compactlmd)];
+                if(assigned == literal){
+                    satisfiedAtRoot = true;
+                }
+            }else{
+                reducedClause[clauseLength++] = literal;
+            }
+        }
+        if(satisfiedAtRoot){
+            continue;
+        }
+        if(clauseLength == 0){
+            queryUnsat = true;
+            if(sourceID < permanentClauseCount){
+                permanentFormulaUnsat = true;
+            }
+            continue;
+        }
+
+        if(clauseLength == 1){
+            const FixedLiteralStatus fixedStatus = classifyFixedLiteral(
+                answerStack, fixedDecisionStackHeight, numLiterals,
+                reducedClause[0]);
+            if(fixedStatus == FIXED_LITERAL_ALREADY_ASSIGNED){
+                continue;
+            }
+            if(fixedStatus == FIXED_LITERAL_CONFLICT){
+                queryUnsat = true;
+                if(sourceID < permanentClauseCount){
+                    permanentFormulaUnsat = true;
+                }
+                continue;
+            }
+            if(fixedStatus == FIXED_LITERAL_INVALID){
+                error = -6;
+                return false;
+            }
+        }
+
+        const bool isTemporary = sourceID >= permanentClauseCount;
+        if(isTemporary && temporaryClauseCount >= _FPGA_MAX_CLAUSES){
+            error = -6;
+            return false;
+        }
+
+        ap_axiu<96,0,0,0> saveCommand;
+        saveCommand.data.range(31,0) = clauseLength;
+        saveCommand.data.range(95,64) = csh::SAVE;
+        clauseStoreInputStream1.write(saveCommand);
+        const int givenClauseID = clauseStoreOutputStream1.read().data;
+        if(givenClauseID < 0){
+            error = givenClauseID;
+            return false;
+        }
+
+        hls::stream<lit> newPages;
+        #pragma HLS stream variable=newPages depth=_FPGA_MAX_LEARN_ELE
+        clsState newClauseState = {.compressedList=0, .remainingUnassigned=0};
+        saveQueryClauseDataflow(newPages, litStore, lmd, newClauseState,
+            reducedClause, clauseLength, givenClauseID, literalPageSize,
+            clauseStoreInputStream1);
+        newClauseState.remainingUnassigned = clauseLength;
+        clsStates[givenClauseID%_FPGA_CLS_STATES_PARTITION]
+            [givenClauseID/_FPGA_CLS_STATES_PARTITION] = newClauseState;
+        if(!newPages.empty()){
+            allocatePage(newPages, freeLitPageAddresses, lmd, litStore, error, literalPageSize);
+            if(error < 0){
+                return false;
+            }
+        }
+
+        if(isTemporary){
+            if(!trackTemporaryClause(temporaryClauseMask, temporaryClauseCount,
+                    givenClauseID)){
+                error = -6;
+                return false;
+            }
+        }
+        if(clauseLength == 1){
+            answerStack[fixedDecisionStackHeight++] = reducedClause[0];
+            if(!isTemporary){
+                permanentRootCount++;
+            }
+        }
+    }
+    return queryUnsat;
+}
+
 extern "C"{
-void solver(clsStatePCIE* clsStates, ap_int<512>* litStore, lit* answerStack,
+void solver(const unsigned int* decision_domain, int num_domain_literals,
+    const lit* assumptions, const lit* queryClauseStore,
+    const clauseMetaData* queryCmd,
+    clsStatePCIE* clsStates, ap_int<512>* litStore, lit* answerStack,
     literalMetaDataPCIE* lmd, int* miscCounters,
     hls::stream<ap_axiu<32,0,0,0>>& pqHandlerValue, hls::stream<ap_axiu<32,0,0,0>>& pqHandlerInput,
     hls::stream<ap_axiu<96,0,0,0>>& clauseStoreInputStream1, hls::stream<ap_axiu<96,0,0,0>>& clauseStoreInputStream2,
@@ -96,6 +233,10 @@ void solver(clsStatePCIE* clsStates, ap_int<512>* litStore, lit* answerStack,
     hls::stream<ap_axiu<64,0,0,0>>& timerValueStream, hls::stream<ap_axiu<1,0,0,0>>& conditionStream,
     hls::stream<ap_axiu<96,0,0,0>>& messageStream){
 
+    #pragma HLS INTERFACE m_axi port=decision_domain offset=slave bundle=gmem7 latency=40
+    #pragma HLS INTERFACE m_axi port=assumptions offset=slave bundle=gmem7 latency=40
+    #pragma HLS INTERFACE m_axi port=queryClauseStore offset=slave bundle=gmem7 latency=40
+    #pragma HLS INTERFACE m_axi port=queryCmd offset=slave bundle=gmem7 latency=40
     #pragma HLS INTERFACE m_axi port=clsStates offset=slave bundle=gmem5 latency=40
     #pragma HLS INTERFACE m_axi port=litStore offset=slave bundle=gmemLitStore1 latency=40
     #pragma HLS INTERFACE m_axi port=answerStack offset=slave bundle=gmem7 latency=40
@@ -110,6 +251,11 @@ void solver(clsStatePCIE* clsStates, ap_int<512>* litStore, lit* answerStack,
     #pragma HLS INTERFACE axis port=conditionStream
     #pragma HLS INTERFACE axis port=messageStream
 
+    #pragma HLS INTERFACE s_axilite port=decision_domain
+    #pragma HLS INTERFACE s_axilite port=num_domain_literals
+    #pragma HLS INTERFACE s_axilite port=assumptions
+    #pragma HLS INTERFACE s_axilite port=queryClauseStore
+    #pragma HLS INTERFACE s_axilite port=queryCmd
     #pragma HLS INTERFACE s_axilite port=clsStates
 	#pragma HLS INTERFACE s_axilite port=litStore
     #pragma HLS INTERFACE s_axilite port=answerStack 
@@ -121,34 +267,42 @@ void solver(clsStatePCIE* clsStates, ap_int<512>* litStore, lit* answerStack,
     unsigned int literalElements = miscCounters[0];
     unsigned int numClauses = miscCounters[1];
     const unsigned int NUM_LITERALS = miscCounters[2];
-    unsigned int fixedDecisionStackHeight = miscCounters[3];
     const ap_uint<1> POSITIVE_LIT_PHASE_VAL = miscCounters[4];
     const unsigned int MAX_LITERAL_ELEMENTS = miscCounters[5];
     const unsigned int LITERAL_PAGE_SIZE = miscCounters[6];
     const unsigned int RESET_MULTIPLIER = miscCounters[7];
+    const unsigned int NUM_PERMANENT_CLAUSES = miscCounters[8];
+    const unsigned int NUM_TEMPORARY_CLAUSES = miscCounters[9];
+    const unsigned int NUM_ASSUMPTIONS = miscCounters[10];
+    const bool SESSION_RESET = miscCounters[12] != 0;
+    const bool INITIAL_ROOT_CONFLICT = miscCounters[15] != 0;
+    miscCounters[50] = 0;
 
-    lit mAnswerStack[_FPGA_MAX_LITERALS];
+    static lit mAnswerStack[_FPGA_MAX_LITERALS];
     #pragma HLS bind_storage variable=mAnswerStack type=RAM_S2P impl=BRAM latency=1
 
-    ap_uint<512> mLitStore[_FPGA_MAX_LITERAL_ELEMENTS/16];
+    static ap_uint<512> mLitStore[_FPGA_MAX_LITERAL_ELEMENTS/16];
     #pragma HLS bind_storage variable=mLitStore type=RAM_S2P impl=URAM latency=1
 
-    literalMetaData mlmd[_FPGA_MAX_LITERALS];
+    static literalMetaData mlmd[_FPGA_MAX_LITERALS];
     #pragma HLS aggregate variable=mlmd compact=auto
     #pragma HLS bind_storage variable=mlmd type=RAM_S2P impl=URAM latency=1
 
     cls unitByCls[_FPGA_MAX_LITERALS];
     #pragma HLS bind_storage variable=unitByCls type=RAM_T2P impl=auto latency=1
 
-    literalMinimizeMetaData mlmmd[_FPGA_PARALLEL_MINIMIZE][_FPGA_MAX_LITERALS];
+    static literalMinimizeMetaData mlmmd[_FPGA_PARALLEL_MINIMIZE][_FPGA_MAX_LITERALS];
     #pragma HLS array_partition variable=mlmmd dim=1 complete
 
-    mmuStream<unsigned int, _MAX_PAGES_LIT_STORE_> freeLitPageAddresses(literalElements,_FPGA_MAX_LITERAL_ELEMENTS,LITERAL_PAGE_SIZE);
+    static bool mInDomain[_FPGA_MAX_LITERALS];
+    #pragma HLS bind_storage variable=mInDomain type=RAM_S2P impl=BRAM latency=1
+
+    static mmuStream<unsigned int, _MAX_PAGES_LIT_STORE_> freeLitPageAddresses;
     #pragma HLS bind_storage variable=freeLitPageAddresses.array type=RAM_S2P impl=URAM
 
     lit literalCommit;
 
-    clsState mClsStates[_FPGA_CLS_STATES_PARTITION][_FPGA_MAX_CLAUSES/_FPGA_CLS_STATES_PARTITION];
+    static clsState mClsStates[_FPGA_CLS_STATES_PARTITION][_FPGA_MAX_CLAUSES/_FPGA_CLS_STATES_PARTITION];
     #pragma HLS aggregate variable=mClsStates compact=auto
     #pragma HLS array_partition variable=mClsStates dim=1 complete
     #pragma HLS bind_storage variable=mClsStates type=RAM_S2P impl=URAM latency=2
@@ -157,12 +311,46 @@ void solver(clsStatePCIE* clsStates, ap_int<512>* litStore, lit* answerStack,
     #pragma HLS array_partition variable=cycleCounter dim=0 complete
     volatile uint64_t store[2];
 
-    sendTime(timerValueStream, conditionStream, 1, &store[0]);
+    static ap_uint<1> temporaryClauseMask[_FPGA_MAX_CLAUSES];
+    #pragma HLS bind_storage variable=temporaryClauseMask type=RAM_S2P impl=BRAM latency=1
+    static unsigned int temporaryClauseCount = 0;
+    static unsigned int answerStackHeight = 0;
+    static unsigned int fixedDecisionStackHeight = 0;
+    static unsigned int permanentRootCount = 0;
+    static bool permanentFormulaUnsat = false;
+    static int decisionLevel = 1;
+    static bool firstIteration = false;
+    bool initialTrackerError = false;
 
-    copy_in_dataflow_wrapper(mClsStates, mLitStore, mlmd, mlmmd, 
-        mAnswerStack,
-        clsStates, litStore, lmd, answerStack,
-        literalElements, numClauses, NUM_LITERALS, store);
+    sendTime(timerValueStream, conditionStream, 1, &store[0]);
+    if(SESSION_RESET){
+        freeLitPageAddresses.reset(literalElements,_FPGA_MAX_LITERAL_ELEMENTS,LITERAL_PAGE_SIZE);
+        copy_in_dataflow_wrapper(mClsStates, mLitStore, mlmd, mlmmd,
+            mAnswerStack, clsStates, litStore, lmd, answerStack,
+            literalElements, numClauses, NUM_LITERALS, store);
+        copy_domain(mInDomain, decision_domain, NUM_LITERALS, num_domain_literals);
+        answerStackHeight = 0;
+        fixedDecisionStackHeight = miscCounters[3];
+        permanentRootCount = miscCounters[3];
+        permanentFormulaUnsat = INITIAL_ROOT_CONFLICT;
+        decisionLevel = (fixedDecisionStackHeight == 0) ? 1 : 0;
+        firstIteration = false;
+        clearTemporaryClauseTracker(temporaryClauseMask, temporaryClauseCount);
+        if(NUM_PERMANENT_CLAUSES > _FPGA_MAX_CLAUSES ||
+           NUM_TEMPORARY_CLAUSES > _FPGA_MAX_CLAUSES - NUM_PERMANENT_CLAUSES){
+            initialTrackerError = true;
+        }
+        INITIAL_TEMPORARY_IDS: for(unsigned int i = 0;
+                i < NUM_TEMPORARY_CLAUSES && !initialTrackerError; i++){
+            #pragma HLS loop_tripcount min=0 max=1024
+            if(!trackTemporaryClause(temporaryClauseMask, temporaryClauseCount,
+                    NUM_PERMANENT_CLAUSES + i)){
+                initialTrackerError = true;
+            }
+        }
+    }else{
+        copy_domain(mInDomain, decision_domain, NUM_LITERALS, num_domain_literals);
+    }
 
     sendTime(timerValueStream, conditionStream, 1, &store[1]);
     cycleCounter[0] += store[1]-store[0];
@@ -172,8 +360,6 @@ void solver(clsStatePCIE* clsStates, ap_int<512>* litStore, lit* answerStack,
     checkCnt = 0;
 
     bool doBackTrack = false;
-    unsigned int answerStackHeight = 0;
-    int decisionLevel = (fixedDecisionStackHeight == 0) ? 1 : 0;
     
     myStream<cls,64,7> unsatClauses;
     unsatClauses.head = 0;
@@ -183,7 +369,6 @@ void solver(clsStatePCIE* clsStates, ap_int<512>* litStore, lit* answerStack,
 
     flippedLiteral litToCheck;
     bool useFlipped = false;
-    bool firstIteration = false;
     unsigned int totalCount = 0;
     unsigned int decideCount = 0;
     unsigned int retryCount = 0;
@@ -201,7 +386,117 @@ void solver(clsStatePCIE* clsStates, ap_int<512>* litStore, lit* answerStack,
     ap_uint<64> litStoreAccessStats[4] = {0,0,0,0};
     #pragma HLS array_partition variable=litStoreAccessStats dim=0 complete
 
+    int setupStatus = initialTrackerError ? -6 : (permanentFormulaUnsat ? -7 : 0);
+    if(!SESSION_RESET){
+        if(answerStackHeight > permanentRootCount){
+            ap_axiu<32,0,0,0> pqCommand;
+            pqCommand.data = pq::UNHIDE_ELE;
+            pqHandlerInput.write(pqCommand);
+            const unsigned int backtrackHeight = answerStackHeight - permanentRootCount;
+            const lit firstRemovedLiteral = mAnswerStack[answerStackHeight-1];
+            undo_states_dataflow_wrapper(pqHandlerInput, mClsStates,
+                mAnswerStack, mlmd, mLitStore, firstRemovedLiteral,
+                backtrackHeight, answerStackHeight, LITERAL_PAGE_SIZE,
+                POSITIVE_LIT_PHASE_VAL, litStoreAccessStats);
+            pqCommand.data = pq::EXIT;
+            pqHandlerInput.write(pqCommand);
+        }
+        fixedDecisionStackHeight = permanentRootCount;
+        if(temporaryClauseCount > _FPGA_MAX_CLAUSES){
+            setupStatus = -6;
+        }else if(temporaryClauseCount > 0){
+            ap_axiu<96,0,0,0> deleteCommand;
+            deleteCommand.data.range(31,0) = temporaryClauseCount;
+            deleteCommand.data.range(95,64) = csh::DELETE_IDS;
+            clauseStoreInputStream1.write(deleteCommand);
+            unsigned int deletedClauseCount = 0;
+            SEND_TEMPORARY_DELETE_IDS: for(unsigned int clauseID = 0;
+                    clauseID < _FPGA_MAX_CLAUSES; clauseID++){
+                #pragma HLS loop_tripcount min=0 max=131072
+                #pragma HLS pipeline II=1
+                if(temporaryClauseMask[clauseID] != 0){
+                    ap_axiu<96,0,0,0> idCommand;
+                    idCommand.data.range(31,0) = clauseID;
+                    clauseStoreInputStream2.write(idCommand);
+                    temporaryClauseMask[clauseID] = 0;
+                    deletedClauseCount++;
+                    if(deletedClauseCount == temporaryClauseCount){
+                        break;
+                    }
+                }
+            }
+            deleteTransposedClauses(mLitStore, mlmd, freeLitPageAddresses,
+                LITERAL_PAGE_SIZE, clauseStoreInputStream1,
+                clauseStoreOutputStream1, locationOutputStream);
+            temporaryClauseCount = 0;
+        }
+        int setupError = 0;
+        const bool queryUnsat = installQueryClauses(queryClauseStore, queryCmd,
+            miscCounters[13], NUM_PERMANENT_CLAUSES + NUM_TEMPORARY_CLAUSES,
+            NUM_PERMANENT_CLAUSES,
+            mClsStates, mLitStore, mlmd, mAnswerStack,
+            fixedDecisionStackHeight, permanentRootCount, permanentFormulaUnsat,
+            freeLitPageAddresses, temporaryClauseMask, temporaryClauseCount,
+            NUM_LITERALS, LITERAL_PAGE_SIZE, setupError,
+            clauseStoreInputStream1, clauseStoreOutputStream1);
+        if(setupError < 0){
+            setupStatus = setupError;
+        }
+        if(queryUnsat){
+            setupStatus = -7;
+        }
+        const bool hasNewPermanentRoots = fixedDecisionStackHeight > answerStackHeight;
+        decisionLevel = hasNewPermanentRoots ? 0 : 1;
+        firstIteration = !hasNewPermanentRoots;
+    }
+
     ap_axiu<96,0,0,0> messageValue;
+
+    if(setupStatus != 0){
+        miscCounters[0] = 0;
+        miscCounters[1] = 0;
+        miscCounters[2] = 0;
+        miscCounters[3] = 0;
+        miscCounters[4] = 0;
+        miscCounters[5] = answerStackHeight;
+        miscCounters[6] = 0;
+        copyStats(learnedStats, longestClause, litStoreAccessStats, cycleCounter, miscCounters);
+
+        ap_axiu<1,0,0,0> stopPacket;
+        stopPacket.data = 1;
+        stopStream.write(stopPacket);
+        ap_axiu<32,0,0,0> pqCommand;
+        pqCommand.data = pq::EXIT;
+        pqHandlerInput.write(pqCommand);
+        FLUSH_RESTART_SETUP: while(true){
+            #pragma HLS loop_tripcount min=16 max=16
+            if(restartValueStream.read().data == 0){
+                break;
+            }
+        }
+        sendTime(timerValueStream, conditionStream, 0, nullptr);
+        messageValue.data.range(95,64) = 0;
+        messageValue.data.range(63,32) = 0;
+        messageValue.data.range(31,0) = setupStatus == -7 ? -1 : setupStatus;
+        messageStream.write(messageValue);
+        ap_axiu<96,0,0,0> clauseCommand;
+        clauseCommand.data.range(95,64) = csh::EXIT;
+        clauseStoreInputStream1.write(clauseCommand);
+        return;
+    }
+
+    if(fixedDecisionStackHeight != 0){
+        ap_axiu<32,0,0,0> pqCommand;
+        pqCommand.data = pq::HIDE_ELE;
+        pqHandlerInput.write(pqCommand);
+        HIDE_FIXED_DECISIONS: for(unsigned int i = 0; i < fixedDecisionStackHeight; i++){
+            #pragma HLS loop_tripcount min=1 max=1024
+            pqCommand.data = abs(mAnswerStack[i]);
+            pqHandlerInput.write(pqCommand);
+        }
+        pqCommand.data = pq::EXIT;
+        pqHandlerInput.write(pqCommand);
+    }
 
     SOLVE_ITERATION: while(true){
         ap_axiu<32,0,0,0> sendPQHandler;
@@ -228,7 +523,11 @@ void solver(clsStatePCIE* clsStates, ap_int<512>* litStore, lit* answerStack,
             messageValue.data.range(31,0) = 1;
             messageStream.write(messageValue);
 
-            lit topLiteral;
+            lit topLiteral = 0;
+                bool domainExhausted = false;
+                bool forceLiteralPhase = false;
+                bool assumptionConflict = false;
+                bool pqSearchStarted = false;
 
             if(!useFlipped && decisionLevel != 0){
                 sendTime(timerValueStream, conditionStream, 1, &store[0]);
@@ -236,60 +535,70 @@ void solver(clsStatePCIE* clsStates, ap_int<512>* litStore, lit* answerStack,
                 
                 literalMetaData getLmd;
                 LMD_IS_IN_STACK(getLmd.compactlmd) = true;
+
+                if((unsigned int)decisionLevel <= NUM_ASSUMPTIONS){
+                    topLiteral = assumptions[decisionLevel-1];
+                    getLmd = mlmd[abs(topLiteral)-1];
+                    if(LMD_IS_IN_STACK(getLmd.compactlmd)){
+                        const lit assigned = mAnswerStack[(unsigned int)LMD_INSERT_LVL(getLmd.compactlmd)];
+                        if(assigned != topLiteral){
+                            assumptionConflict = true;
+                        }else{
+                            if((unsigned int)decisionLevel < _FPGA_MAX_LITERALS){
+                                mlmd[decisionLevel].decisionLevelStackEnd = answerStackHeight;
+                            }
+                            sendTime(timerValueStream, conditionStream, 1, &store[1]);
+                            cycleCounter[1] += store[1]-store[0];
+                            decisionLevel++;
+                            continue;
+                        }
+                    }
+                    forceLiteralPhase = true;
+                    ap_axiu<32,0,0,0> assumptionCommand;
+                    assumptionCommand.data = pq::HIDE_ELE;
+                    pqHandlerInput.write(assumptionCommand);
+                    assumptionCommand.data = abs(topLiteral);
+                    pqHandlerInput.write(assumptionCommand);
+                    assumptionCommand.data = pq::EXIT;
+                    pqHandlerInput.write(assumptionCommand);
+                }
                 
-                FIND_TOP: while(true){
+                FIND_TOP: while(!forceLiteralPhase && !doBackTrack){
                     #pragma HLS loop_tripcount min=16 max=16
                     if(!LMD_IS_IN_STACK(getLmd.compactlmd)){
                         break;
                     }
                     sendPQHandler.data = pq::GET_UNDECIDED;
                     pqHandlerInput.write(sendPQHandler);
+                    pqSearchStarted = true;
                                 
                     ap_wait();
                     
                     ap_axiu<32,0,0,0> getPQHandler = pqHandlerValue.read();
 
                     topLiteral = getPQHandler.data;
+                    if(topLiteral == pq::DOMAIN_EXHAUSTED){
+                        domainExhausted = true;
+                        break;
+                    }
                     getLmd = mlmd[topLiteral-1];     
                 }
-                sendPQHandler.data = pq::EXIT;
-                pqHandlerInput.write(sendPQHandler);
+                if(pqSearchStarted){
+                    sendPQHandler.data = pq::EXIT;
+                    pqHandlerInput.write(sendPQHandler);
+                }
                 
                 sendTime(timerValueStream, conditionStream, 1, &store[1]);
                 cycleCounter[1] += store[1]-store[0];
             }
-            
-            sendTime(timerValueStream, conditionStream, 1, &store[0]);
 
-            ap_axiu<96,0,0,0> sendClauseInputCommand;
-            sendClauseInputCommand.data.range(31,0) = 0;
-            sendClauseInputCommand.data.range(95,64) = csh::SEND_LEN_BCP;
-            clauseStoreInputStream1.write(sendClauseInputCommand);
-
-            bcp_discover_dataflow_wrapper(mClsStates,
-                mAnswerStack, mlmd, mlmmd, unitByCls,
-                mLitStore,
-                answerStackHeight, unsatClauses, fixedDecisionStackHeight, literalCommit, doBackTrack,
-                topLiteral, litToCheck, fixedDecisionStackHeight, decisionLevel, useFlipped, firstIteration, 
-                LITERAL_PAGE_SIZE, POSITIVE_LIT_PHASE_VAL,
-                litStoreAccessStats, store, pqHandlerInput, clauseStoreInputStream1, clauseStoreOutputStream1);
-            
-            sendClauseInputCommand.data.range(31,0) = csh::EXIT;
-            sendClauseInputCommand.data.range(95,64) = csh::SEND_LEN_BCP;
-            clauseStoreInputStream1.write(sendClauseInputCommand);
-
-            mlmd[decisionLevel].decisionLevelStackEnd = answerStackHeight;
-
-            decisionLevel++;
-            if(doBackTrack){
-                decisionLevel--;
-            }
-
-            sendTime(timerValueStream, conditionStream, 1, &store[1]);
-            cycleCounter[2] += store[1]-store[0];
-
-            //Fixed decision stack lead to conflict so its unsolvable
-            if(decisionLevel == 0){
+            if(assumptionConflict){
+                unsigned int coreCount = 0;
+                const bool coreExtracted = extractUnsatCore(answerStack, coreCount,
+                    assumptions, NUM_ASSUMPTIONS, mAnswerStack,
+                    answerStackHeight, mlmd, mlmmd, unitByCls, unsatClauses,
+                    decisionLevel-1, NUM_LITERALS, clauseStoreInputStream1,
+                    clauseStoreInputStream2, clauseStoreOutputStream1);
                 miscCounters[0] = totalCount;
                 miscCounters[1] = decideCount;
                 miscCounters[2] = retryCount;
@@ -297,38 +606,130 @@ void solver(clsStatePCIE* clsStates, ap_int<512>* litStore, lit* answerStack,
                 miscCounters[4] = resetCount;
                 miscCounters[5] = answerStackHeight;
                 miscCounters[6] = 0;
-
+                miscCounters[50] = coreCount;
+                if(NUM_TEMPORARY_CLAUSES == 0 && coreExtracted && coreCount == 0){
+                    permanentFormulaUnsat = true;
+                }
                 copyStats(learnedStats, longestClause, litStoreAccessStats, cycleCounter, miscCounters);
 
                 ap_axiu<1,0,0,0> pkt;
                 pkt.data = 1;
                 stopStream.write(pkt);
-
                 sendPQHandler.data = pq::EXIT;
                 pqHandlerInput.write(sendPQHandler);
-
-                FLUSH_RESTART_1: while(true){
+                FLUSH_RESTART_ASSUMPTION: while(true){
                     #pragma HLS loop_tripcount min=16 max=16
                     if(restartValueStream.read().data == 0){
                         break;
                     }
                 }
-
                 sendTime(timerValueStream, conditionStream, 0, nullptr);
                 messageValue.data.range(95,64) = 0;
                 messageValue.data.range(63,32) = 0;
-                messageValue.data.range(31,0) = -1;
+                messageValue.data.range(31,0) = coreExtracted ? -1 : -8;
                 messageStream.write(messageValue);
-
                 ap_axiu<96,0,0,0> sendClauseInputCommand;
                 sendClauseInputCommand.data.range(95,64) = csh::EXIT;
-
                 clauseStoreInputStream1.write(sendClauseInputCommand);
-
                 return;
             }
 
-            if(answerStackHeight == NUM_LITERALS && !doBackTrack){
+            if(!domainExhausted){
+                sendTime(timerValueStream, conditionStream, 1, &store[0]);
+
+                ap_axiu<96,0,0,0> sendClauseInputCommand;
+                sendClauseInputCommand.data.range(31,0) = 0;
+                sendClauseInputCommand.data.range(95,64) = csh::SEND_LEN_BCP;
+                clauseStoreInputStream1.write(sendClauseInputCommand);
+
+                const unsigned int fixedDecisionsToPropagate =
+                    decisionLevel == 0
+                        ? fixedDecisionStackHeight - answerStackHeight
+                        : fixedDecisionStackHeight;
+                bcp_discover_dataflow_wrapper(mClsStates,
+                    mAnswerStack, mlmd, mlmmd, unitByCls, mInDomain,
+                    mLitStore,
+                    answerStackHeight, unsatClauses, fixedDecisionStackHeight, literalCommit, doBackTrack,
+                    topLiteral, litToCheck, fixedDecisionsToPropagate, decisionLevel, useFlipped, firstIteration,
+                    forceLiteralPhase,
+                    LITERAL_PAGE_SIZE, POSITIVE_LIT_PHASE_VAL,
+                    litStoreAccessStats, store, pqHandlerInput, clauseStoreInputStream1, clauseStoreOutputStream1);
+
+                sendClauseInputCommand.data.range(31,0) = csh::EXIT;
+                sendClauseInputCommand.data.range(95,64) = csh::SEND_LEN_BCP;
+                clauseStoreInputStream1.write(sendClauseInputCommand);
+
+                if((unsigned int)decisionLevel < _FPGA_MAX_LITERALS){
+                    mlmd[decisionLevel].decisionLevelStackEnd = answerStackHeight;
+                }
+
+                decisionLevel++;
+                if(doBackTrack){
+                    decisionLevel--;
+                }
+
+                sendTime(timerValueStream, conditionStream, 1, &store[1]);
+                cycleCounter[2] += store[1]-store[0];
+
+                // A conflict in the fixed decision stack makes the query unsatisfiable.
+                if(decisionLevel == 0 || (doBackTrack && (unsigned int)decisionLevel <= NUM_ASSUMPTIONS)){
+                    unsigned int coreCount = 0;
+                    bool coreExtracted = true;
+                    if(decisionLevel != 0){
+                        coreExtracted = extractUnsatCore(answerStack, coreCount,
+                            assumptions, NUM_ASSUMPTIONS, mAnswerStack,
+                            answerStackHeight, mlmd, mlmmd, unitByCls,
+                            unsatClauses, -1, NUM_LITERALS,
+                            clauseStoreInputStream1, clauseStoreInputStream2,
+                            clauseStoreOutputStream1);
+                    }
+                    miscCounters[0] = totalCount;
+                    miscCounters[1] = decideCount;
+                    miscCounters[2] = retryCount;
+                    miscCounters[3] = backtrackCount;
+                    miscCounters[4] = resetCount;
+                    miscCounters[5] = answerStackHeight;
+                    miscCounters[6] = 0;
+                    miscCounters[50] = coreCount;
+                    if(NUM_TEMPORARY_CLAUSES == 0 && coreExtracted && coreCount == 0){
+                        permanentFormulaUnsat = true;
+                    }
+
+                    copyStats(learnedStats, longestClause, litStoreAccessStats, cycleCounter, miscCounters);
+
+                    ap_axiu<1,0,0,0> pkt;
+                    pkt.data = 1;
+                    stopStream.write(pkt);
+
+                    sendPQHandler.data = pq::EXIT;
+                    pqHandlerInput.write(sendPQHandler);
+
+                    FLUSH_RESTART_1: while(true){
+                        #pragma HLS loop_tripcount min=16 max=16
+                        if(restartValueStream.read().data == 0){
+                            break;
+                        }
+                    }
+
+                    sendTime(timerValueStream, conditionStream, 0, nullptr);
+                    messageValue.data.range(95,64) = 0;
+                    messageValue.data.range(63,32) = 0;
+                    messageValue.data.range(31,0) = coreExtracted ? -1 : -8;
+                    messageStream.write(messageValue);
+
+                    ap_axiu<96,0,0,0> sendClauseInputCommand;
+                    sendClauseInputCommand.data.range(95,64) = csh::EXIT;
+
+                    clauseStoreInputStream1.write(sendClauseInputCommand);
+
+                    return;
+                }
+            }
+
+            const bool allAssumptionsProcessed =
+                (unsigned int)decisionLevel > NUM_ASSUMPTIONS;
+            if((domainExhausted || answerStackHeight == NUM_LITERALS) &&
+               allAssumptionsProcessed && !doBackTrack){
                 miscCounters[0] = totalCount;
                 miscCounters[1] = decideCount;
                 miscCounters[2] = retryCount;
@@ -339,7 +740,7 @@ void solver(clsStatePCIE* clsStates, ap_int<512>* litStore, lit* answerStack,
 
                 copyStats(learnedStats, longestClause, litStoreAccessStats, cycleCounter, miscCounters);
 
-                COPY_OUT: for(unsigned int i = 0; i < NUM_LITERALS; i++){
+                COPY_OUT: for(unsigned int i = 0; i < answerStackHeight; i++){
                     #pragma HLS loop_tripcount min=1024 max=1024
                     answerStack[i] = mAnswerStack[i];
                 }
@@ -392,7 +793,8 @@ void solver(clsStatePCIE* clsStates, ap_int<512>* litStore, lit* answerStack,
 
             int error = 0;
             lit insertPropagate[2] = {0,0};
-            int givenClsID;
+            int givenClsID = -1;
+            bool learntIsTemporary = false;
 
             learnClause(mClsStates,
                 mLitStore,
@@ -401,9 +803,22 @@ void solver(clsStatePCIE* clsStates, ap_int<512>* litStore, lit* answerStack,
                 mAnswerStack, unitByCls, literalCommit, answerStackHeight,
                 POSITIVE_LIT_PHASE_VAL, resetAll, unsatClauses, 
                 NUM_LITERALS, MAX_LITERAL_ELEMENTS, LITERAL_PAGE_SIZE,
+                miscCounters[11], learntIsTemporary,
                 learnedStats, litStoreAccessStats, longestClause, error,
                 clauseStoreInputStream1, clauseStoreInputStream2, clauseStoreOutputStream1, clauseStoreOutputStream2, 
                 pqHandlerInput, pqHandlerValue, timerValueStream, conditionStream, cycleCounter);
+
+            if(givenClsID >= 0 && learntIsTemporary){
+                if(!trackTemporaryClause(temporaryClauseMask,
+                        temporaryClauseCount, givenClsID)){
+                    error = -6;
+                }
+            }
+
+            if(resetAll && resetCount == 11){
+                sendPQHandler.data = pq::SWITCH_TO_HEAP;
+                pqHandlerInput.write(sendPQHandler);
+            }
             
 
             if(error < 0){
