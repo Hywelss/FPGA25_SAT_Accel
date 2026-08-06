@@ -20,6 +20,9 @@ namespace pq{
 
 static const unsigned int GIPSAT_NUM_BUCKETS = 17;
 static const unsigned int GIPSAT_POSITION_NONE = UINT_MAX;
+typedef ap_uint<16> gipsatLink;
+typedef ap_uint<5> gipsatBucket;
+static const gipsatLink GIPSAT_LINK_NONE = 0xffff;
 
 namespace solverCode{
     enum sr_codes{UNIT=0,BACKTRACK=1,CLS2=2,EOS_CNT=3};

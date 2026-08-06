@@ -30,47 +30,47 @@ void unhide_wrapper(hls::stream<ap_axiu<32,0,0,0>>& input, pqData mPriorityQueue
 
 unsigned int gipsatBucketIndex(unsigned int position);
 void loadGipsatBuckets(pqPosition mPositioning[_FPGA_MAX_LITERALS],
-    ap_uint<3> bucketState[_FPGA_MAX_LITERALS], unsigned int bucketNext[_FPGA_MAX_LITERALS],
-    unsigned int bucketHeads[GIPSAT_NUM_BUCKETS], const unsigned int* decisionDomain,
+    ap_uint<3> bucketState[_FPGA_MAX_LITERALS], gipsatLink bucketNext[_FPGA_MAX_LITERALS],
+    gipsatLink bucketHeads[GIPSAT_NUM_BUCKETS], const unsigned int* decisionDomain,
     unsigned int NUM_LITERALS, unsigned int NUM_DOMAIN_LITERALS,
-    unsigned int& bucketHead, unsigned int& activityHeapSize);
+    gipsatBucket& bucketHead, gipsatLink& activityHeapSize);
 void reloadGipsatBuckets(const pqData mActivityHeap[2][_FPGA_MAX_LITERALS],
     const pqPosition mPositioning[_FPGA_MAX_LITERALS],
-    ap_uint<3> bucketState[_FPGA_MAX_LITERALS], unsigned int bucketNext[_FPGA_MAX_LITERALS],
-    unsigned int bucketHeads[GIPSAT_NUM_BUCKETS], const unsigned int* decisionDomain,
+    ap_uint<3> bucketState[_FPGA_MAX_LITERALS], gipsatLink bucketNext[_FPGA_MAX_LITERALS],
+    gipsatLink bucketHeads[GIPSAT_NUM_BUCKETS], const unsigned int* decisionDomain,
     unsigned int NUM_LITERALS, unsigned int NUM_DOMAIN_LITERALS,
-    unsigned int activityHeapSize, unsigned int& bucketHead);
+    gipsatLink activityHeapSize, gipsatBucket& bucketHead);
 void gipsatBucketPush(unsigned int variable,
     const pqData mActivityHeap[2][_FPGA_MAX_LITERALS], const pqPosition mPositioning[_FPGA_MAX_LITERALS],
-    ap_uint<3> bucketState[_FPGA_MAX_LITERALS], unsigned int bucketNext[_FPGA_MAX_LITERALS],
-    unsigned int bucketHeads[GIPSAT_NUM_BUCKETS], unsigned int activityHeapSize,
-    unsigned int& bucketHead);
+    ap_uint<3> bucketState[_FPGA_MAX_LITERALS], gipsatLink bucketNext[_FPGA_MAX_LITERALS],
+    gipsatLink bucketHeads[GIPSAT_NUM_BUCKETS], gipsatLink activityHeapSize,
+    gipsatBucket& bucketHead);
 lit gipsatBucketPop(ap_uint<3> bucketState[_FPGA_MAX_LITERALS],
-    const unsigned int bucketNext[_FPGA_MAX_LITERALS],
-    unsigned int bucketHeads[GIPSAT_NUM_BUCKETS], unsigned int& bucketHead);
+    const gipsatLink bucketNext[_FPGA_MAX_LITERALS],
+    gipsatLink bucketHeads[GIPSAT_NUM_BUCKETS], gipsatBucket& bucketHead);
 void gipsatBumpActivity(hls::stream<lit>& input,
     pqData mActivityHeap[2][_FPGA_MAX_LITERALS], pqPosition mPositioning[_FPGA_MAX_LITERALS],
-    unsigned int& activityHeapSize, double& multiplier, const double decayFactor);
+    gipsatLink& activityHeapSize, double& multiplier, const double decayFactor);
 void gipsatBumpActivityWrapper(hls::stream<ap_axiu<32,0,0,0>>& input,
     pqData mActivityHeap[2][_FPGA_MAX_LITERALS], pqPosition mPositioning[_FPGA_MAX_LITERALS],
-    unsigned int& activityHeapSize, double& multiplier, const double decayFactor);
+    gipsatLink& activityHeapSize, double& multiplier, const double decayFactor);
 void gipsatBucketUnhide(hls::stream<lit>& input,
     const pqData mActivityHeap[2][_FPGA_MAX_LITERALS], const pqPosition mPositioning[_FPGA_MAX_LITERALS],
-    ap_uint<3> bucketState[_FPGA_MAX_LITERALS], unsigned int bucketNext[_FPGA_MAX_LITERALS],
-    unsigned int bucketHeads[GIPSAT_NUM_BUCKETS], unsigned int activityHeapSize,
-    unsigned int& bucketHead);
+    ap_uint<3> bucketState[_FPGA_MAX_LITERALS], gipsatLink bucketNext[_FPGA_MAX_LITERALS],
+    gipsatLink bucketHeads[GIPSAT_NUM_BUCKETS], gipsatLink activityHeapSize,
+    gipsatBucket& bucketHead);
 void gipsatBucketUnhideWrapper(hls::stream<ap_axiu<32,0,0,0>>& input,
     const pqData mActivityHeap[2][_FPGA_MAX_LITERALS], const pqPosition mPositioning[_FPGA_MAX_LITERALS],
-    ap_uint<3> bucketState[_FPGA_MAX_LITERALS], unsigned int bucketNext[_FPGA_MAX_LITERALS],
-    unsigned int bucketHeads[GIPSAT_NUM_BUCKETS], unsigned int activityHeapSize,
-    unsigned int& bucketHead);
+    ap_uint<3> bucketState[_FPGA_MAX_LITERALS], gipsatLink bucketNext[_FPGA_MAX_LITERALS],
+    gipsatLink bucketHeads[GIPSAT_NUM_BUCKETS], gipsatLink activityHeapSize,
+    gipsatBucket& bucketHead);
 void gipsatBucketHide(hls::stream<lit>& input,
     ap_uint<3> bucketState[_FPGA_MAX_LITERALS]);
 void gipsatBucketHideWrapper(hls::stream<ap_axiu<32,0,0,0>>& input,
     ap_uint<3> bucketState[_FPGA_MAX_LITERALS]);
 void gipsatSwitchToHeap(const unsigned int* decisionDomain,
     pqData mPriorityQueue[2][_FPGA_MAX_LITERALS], pqPosition mPositioning[_FPGA_MAX_LITERALS],
-    const ap_uint<3> bucketState[_FPGA_MAX_LITERALS], unsigned int newPosition[_FPGA_MAX_LITERALS],
+    const ap_uint<3> bucketState[_FPGA_MAX_LITERALS], gipsatLink newPosition[_FPGA_MAX_LITERALS],
     unsigned int NUM_LITERALS, unsigned int NUM_DOMAIN_LITERALS,
-    unsigned int activityHeapSize, unsigned int& remainingLiterals);
+    gipsatLink activityHeapSize, unsigned int& remainingLiterals);
 #endif

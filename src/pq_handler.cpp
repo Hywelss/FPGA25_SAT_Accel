@@ -32,10 +32,10 @@ void pqHandler(const unsigned int* decision_domain, int num_literals, int num_do
     static ap_uint<3> bucketState[_FPGA_MAX_LITERALS];
     #pragma HLS bind_storage variable=bucketState type=RAM_S2P impl=BRAM latency=1
 
-    static unsigned int bucketNext[_FPGA_MAX_LITERALS];
+    static gipsatLink bucketNext[_FPGA_MAX_LITERALS];
     #pragma HLS bind_storage variable=bucketNext type=RAM_S2P impl=BRAM latency=1
 
-    static unsigned int bucketHeads[GIPSAT_NUM_BUCKETS];
+    static gipsatLink bucketHeads[GIPSAT_NUM_BUCKETS];
     #pragma HLS array_partition variable=bucketHeads complete
 
     unsigned int remainingLiterals = num_domain_literals;
@@ -45,8 +45,8 @@ void pqHandler(const unsigned int* decision_domain, int num_literals, int num_do
     static double multiplier = 1.0;
     double decayFactor = decay;
 
-    static unsigned int bucketHead = 0;
-    static unsigned int activityHeapSize = 0;
+    static gipsatBucket bucketHead = 0;
+    static gipsatLink activityHeapSize = 0;
     static unsigned int previousNumLiterals = 0;
     bool useBucket = true;
     if(session_reset){

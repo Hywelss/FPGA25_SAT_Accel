@@ -1,1 +1,4 @@
 /build/
+/.Xil/
+/timing-analysis/
+/timing-experiments/

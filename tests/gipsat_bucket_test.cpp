@@ -12,8 +12,8 @@ constexpr unsigned int kNumVariables = 64;
 pqData queue_data[2][_FPGA_MAX_LITERALS];
 pqPosition positions[_FPGA_MAX_LITERALS];
 ap_uint<3> bucket_state[_FPGA_MAX_LITERALS];
-unsigned int bucket_next[_FPGA_MAX_LITERALS];
-unsigned int bucket_heads[GIPSAT_NUM_BUCKETS];
+gipsatLink bucket_next[_FPGA_MAX_LITERALS];
+gipsatLink bucket_heads[GIPSAT_NUM_BUCKETS];
 
 unsigned int bit_length(unsigned int value) {
     unsigned int result = 0;
@@ -165,7 +165,7 @@ class RustVsidsModel {
 };
 
 void hardware_bump(const std::vector<unsigned int>& variables,
-                   unsigned int& activity_heap_size, double& multiplier) {
+                   gipsatLink& activity_heap_size, double& multiplier) {
     hls::stream<lit> input;
     for (unsigned int variable : variables) {
         input.write(variable);
@@ -182,8 +182,8 @@ void hide_bucket(unsigned int variable) {
     gipsatBucketHide(input, bucket_state);
 }
 
-void unhide_bucket(unsigned int variable, unsigned int activity_heap_size,
-                   unsigned int& bucket_head) {
+void unhide_bucket(unsigned int variable, gipsatLink activity_heap_size,
+                   gipsatBucket& bucket_head) {
     hls::stream<lit> input;
     input.write(variable);
     input.write(pq::EXIT);
@@ -193,8 +193,8 @@ void unhide_bucket(unsigned int variable, unsigned int activity_heap_size,
 
 void test_assignment_visibility() {
     unsigned int domain[] = {1, 2, 3, 4};
-    unsigned int bucket_head = 0;
-    unsigned int activity_heap_size = 0;
+    gipsatBucket bucket_head = 0;
+    gipsatLink activity_heap_size = 0;
 
     loadGipsatBuckets(positions, bucket_state, bucket_next, bucket_heads,
                       domain, 4, 4, bucket_head, activity_heap_size);
@@ -231,10 +231,25 @@ void test_assignment_visibility() {
     assert(remaining == 4);
     assert(positions[3].pos < remaining);
 }
+
+void test_maximum_variable_link_width() {
+    unsigned int domain[] = {1, _FPGA_MAX_LITERALS};
+    gipsatBucket bucket_head = 0;
+    gipsatLink activity_heap_size = 0;
+
+    loadGipsatBuckets(positions, bucket_state, bucket_next, bucket_heads,
+                      domain, _FPGA_MAX_LITERALS, 2, bucket_head,
+                      activity_heap_size);
+    assert(gipsatBucketPop(bucket_state, bucket_next, bucket_heads,
+                           bucket_head) == _FPGA_MAX_LITERALS);
+    assert(gipsatBucketPop(bucket_state, bucket_next, bucket_heads,
+                           bucket_head) == 1);
+}
 }  // namespace
 
 int main() {
     test_assignment_visibility();
+    test_maximum_variable_link_width();
 
     std::vector<unsigned int> domain;
     unsigned int domain_array[kNumVariables / 2];
@@ -243,8 +258,8 @@ int main() {
         domain.push_back(domain_array[i]);
     }
 
-    unsigned int bucket_head = 0;
-    unsigned int activity_heap_size = 0;
+    gipsatBucket bucket_head = 0;
+    gipsatLink activity_heap_size = 0;
     double multiplier = 1.0;
     loadGipsatBuckets(positions, bucket_state, bucket_next, bucket_heads,
                       domain_array, kNumVariables, domain.size(), bucket_head,

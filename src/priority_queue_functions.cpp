@@ -384,9 +384,9 @@ unsigned int gipsatBucketIndex(unsigned int position){
 
 void gipsatBucketPush(unsigned int variable,
     const pqData mActivityHeap[2][_FPGA_MAX_LITERALS], const pqPosition mPositioning[_FPGA_MAX_LITERALS],
-    ap_uint<3> bucketState[_FPGA_MAX_LITERALS], unsigned int bucketNext[_FPGA_MAX_LITERALS],
-    unsigned int bucketHeads[GIPSAT_NUM_BUCKETS], unsigned int activityHeapSize,
-    unsigned int& bucketHead){
+    ap_uint<3> bucketState[_FPGA_MAX_LITERALS], gipsatLink bucketNext[_FPGA_MAX_LITERALS],
+    gipsatLink bucketHeads[GIPSAT_NUM_BUCKETS], gipsatLink activityHeapSize,
+    gipsatBucket& bucketHead){
     #pragma HLS inline
     const unsigned int index = variable-1;
     if(bucketState[index][0] == 0 || bucketState[index][1] != 0 || bucketState[index][2] != 0){
@@ -396,7 +396,8 @@ void gipsatBucketPush(unsigned int variable,
     const unsigned int position = mPositioning[index].pos;
     const bool inActivityHeap = position < activityHeapSize &&
         mActivityHeap[0][position].literal == (lit)variable;
-    const unsigned int bucket = gipsatBucketIndex(inActivityHeap ? position : activityHeapSize);
+    const unsigned int bucket = gipsatBucketIndex(
+        inActivityHeap ? position : (unsigned int)activityHeapSize);
 
     bucketNext[index] = bucketHeads[bucket];
     bucketHeads[bucket] = variable;
@@ -407,10 +408,10 @@ void gipsatBucketPush(unsigned int variable,
 }
 
 void loadGipsatBuckets(pqPosition mPositioning[_FPGA_MAX_LITERALS],
-    ap_uint<3> bucketState[_FPGA_MAX_LITERALS], unsigned int bucketNext[_FPGA_MAX_LITERALS],
-    unsigned int bucketHeads[GIPSAT_NUM_BUCKETS], const unsigned int* decisionDomain,
+    ap_uint<3> bucketState[_FPGA_MAX_LITERALS], gipsatLink bucketNext[_FPGA_MAX_LITERALS],
+    gipsatLink bucketHeads[GIPSAT_NUM_BUCKETS], const unsigned int* decisionDomain,
     unsigned int NUM_LITERALS, unsigned int NUM_DOMAIN_LITERALS,
-    unsigned int& bucketHead, unsigned int& activityHeapSize){
+    gipsatBucket& bucketHead, gipsatLink& activityHeapSize){
     #pragma HLS inline off
 
     INIT_BUCKET_VARIABLES: for(unsigned int i = 0; i < NUM_LITERALS; i++){
@@ -438,10 +439,10 @@ void loadGipsatBuckets(pqPosition mPositioning[_FPGA_MAX_LITERALS],
 
 void reloadGipsatBuckets(const pqData mActivityHeap[2][_FPGA_MAX_LITERALS],
     const pqPosition mPositioning[_FPGA_MAX_LITERALS],
-    ap_uint<3> bucketState[_FPGA_MAX_LITERALS], unsigned int bucketNext[_FPGA_MAX_LITERALS],
-    unsigned int bucketHeads[GIPSAT_NUM_BUCKETS], const unsigned int* decisionDomain,
+    ap_uint<3> bucketState[_FPGA_MAX_LITERALS], gipsatLink bucketNext[_FPGA_MAX_LITERALS],
+    gipsatLink bucketHeads[GIPSAT_NUM_BUCKETS], const unsigned int* decisionDomain,
     unsigned int NUM_LITERALS, unsigned int NUM_DOMAIN_LITERALS,
-    unsigned int activityHeapSize, unsigned int& bucketHead){
+    gipsatLink activityHeapSize, gipsatBucket& bucketHead){
     #pragma HLS inline off
 
     RELOAD_BUCKET_VARIABLES: for(unsigned int i = 0; i < NUM_LITERALS; i++){
@@ -464,8 +465,8 @@ void reloadGipsatBuckets(const pqData mActivityHeap[2][_FPGA_MAX_LITERALS],
 }
 
 lit gipsatBucketPop(ap_uint<3> bucketState[_FPGA_MAX_LITERALS],
-    const unsigned int bucketNext[_FPGA_MAX_LITERALS],
-    unsigned int bucketHeads[GIPSAT_NUM_BUCKETS], unsigned int& bucketHead){
+    const gipsatLink bucketNext[_FPGA_MAX_LITERALS],
+    gipsatLink bucketHeads[GIPSAT_NUM_BUCKETS], gipsatBucket& bucketHead){
     #pragma HLS inline
     POP_AVAILABLE_BUCKET_LITERAL: while(true){
         #pragma HLS loop_tripcount min=1 max=1024
@@ -488,7 +489,7 @@ lit gipsatBucketPop(ap_uint<3> bucketState[_FPGA_MAX_LITERALS],
 
 void gipsatBumpActivity(hls::stream<lit>& input,
     pqData mActivityHeap[2][_FPGA_MAX_LITERALS], pqPosition mPositioning[_FPGA_MAX_LITERALS],
-    unsigned int& activityHeapSize, double& multiplier, const double decayFactor){
+    gipsatLink& activityHeapSize, double& multiplier, const double decayFactor){
     #pragma HLS inline off
     BUMP_ACTIVITY: while(true){
         #pragma HLS loop_tripcount min=32 max=32
@@ -504,7 +505,11 @@ void gipsatBumpActivity(hls::stream<lit>& input,
                 mActivityHeap[0][position].literal == variable;
             pqData bumped = present ? mActivityHeap[0][position] : (pqData){.score=0,.literal=variable};
             bumped.score += multiplier;
-            const unsigned int insertPosition = present ? position : activityHeapSize++;
+            unsigned int insertPosition = position;
+            if(!present){
+                insertPosition = activityHeapSize;
+                activityHeapSize++;
+            }
             mPositioning[index].pos = insertPosition;
             mActivityHeap[0][insertPosition] = bumped;
             mActivityHeap[1][insertPosition] = bumped;
@@ -525,7 +530,7 @@ void gipsatBumpActivity(hls::stream<lit>& input,
 
 void gipsatBumpActivityWrapper(hls::stream<ap_axiu<32,0,0,0>>& input,
     pqData mActivityHeap[2][_FPGA_MAX_LITERALS], pqPosition mPositioning[_FPGA_MAX_LITERALS],
-    unsigned int& activityHeapSize, double& multiplier, const double decayFactor){
+    gipsatLink& activityHeapSize, double& multiplier, const double decayFactor){
     #pragma HLS inline off
     hls::stream<lit> intermediateStream;
     #pragma HLS stream variable=intermediateStream depth=_FPGA_MAX_LEARN_ELE
@@ -537,9 +542,9 @@ void gipsatBumpActivityWrapper(hls::stream<ap_axiu<32,0,0,0>>& input,
 
 void gipsatBucketUnhide(hls::stream<lit>& input,
     const pqData mActivityHeap[2][_FPGA_MAX_LITERALS], const pqPosition mPositioning[_FPGA_MAX_LITERALS],
-    ap_uint<3> bucketState[_FPGA_MAX_LITERALS], unsigned int bucketNext[_FPGA_MAX_LITERALS],
-    unsigned int bucketHeads[GIPSAT_NUM_BUCKETS], unsigned int activityHeapSize,
-    unsigned int& bucketHead){
+    ap_uint<3> bucketState[_FPGA_MAX_LITERALS], gipsatLink bucketNext[_FPGA_MAX_LITERALS],
+    gipsatLink bucketHeads[GIPSAT_NUM_BUCKETS], gipsatLink activityHeapSize,
+    gipsatBucket& bucketHead){
     #pragma HLS inline off
     UNHIDE_BUCKET: while(true){
         #pragma HLS loop_tripcount min=32 max=32
@@ -558,13 +563,13 @@ void gipsatBucketUnhide(hls::stream<lit>& input,
 
 void gipsatBucketUnhideWrapper(hls::stream<ap_axiu<32,0,0,0>>& input,
     const pqData mActivityHeap[2][_FPGA_MAX_LITERALS], const pqPosition mPositioning[_FPGA_MAX_LITERALS],
-    ap_uint<3> bucketState[_FPGA_MAX_LITERALS], unsigned int bucketNext[_FPGA_MAX_LITERALS],
-    unsigned int bucketHeads[GIPSAT_NUM_BUCKETS], unsigned int activityHeapSize,
-    unsigned int& bucketHead){
+    ap_uint<3> bucketState[_FPGA_MAX_LITERALS], gipsatLink bucketNext[_FPGA_MAX_LITERALS],
+    gipsatLink bucketHeads[GIPSAT_NUM_BUCKETS], gipsatLink activityHeapSize,
+    gipsatBucket& bucketHead){
     #pragma HLS inline off
     hls::stream<lit> intermediateStream;
     #pragma HLS stream variable=intermediateStream depth=MAX_STREAM_DEPTH
-    #pragma HLS bind_storage variable=intermediateStream type=FIFO impl=URAM
+    #pragma HLS bind_storage variable=intermediateStream type=FIFO impl=BRAM
     #pragma HLS dataflow
     axiStreamBuffer(input, intermediateStream);
     gipsatBucketUnhide(intermediateStream, mActivityHeap, mPositioning, bucketState,
@@ -611,7 +616,7 @@ static pqData gipsatActivity(const pqData mActivityHeap[2][_FPGA_MAX_LITERALS],
 }
 
 static void gipsatHeapPushSingle(pqData heap[_FPGA_MAX_LITERALS],
-    unsigned int newPosition[_FPGA_MAX_LITERALS], pqData value, unsigned int size){
+    gipsatLink newPosition[_FPGA_MAX_LITERALS], pqData value, unsigned int size){
     #pragma HLS inline
     unsigned int position = size;
     PUSH_SINGLE_HEAP: while(position != 0){
@@ -631,14 +636,14 @@ static void gipsatHeapPushSingle(pqData heap[_FPGA_MAX_LITERALS],
 
 void gipsatSwitchToHeap(const unsigned int* decisionDomain,
     pqData mPriorityQueue[2][_FPGA_MAX_LITERALS], pqPosition mPositioning[_FPGA_MAX_LITERALS],
-    const ap_uint<3> bucketState[_FPGA_MAX_LITERALS], unsigned int newPosition[_FPGA_MAX_LITERALS],
+    const ap_uint<3> bucketState[_FPGA_MAX_LITERALS], gipsatLink newPosition[_FPGA_MAX_LITERALS],
     unsigned int NUM_LITERALS, unsigned int NUM_DOMAIN_LITERALS,
-    unsigned int activityHeapSize, unsigned int& remainingLiterals){
+    gipsatLink activityHeapSize, unsigned int& remainingLiterals){
     #pragma HLS inline off
 
     CLEAR_NEW_POSITIONS: for(unsigned int i = 0; i < NUM_LITERALS; i++){
         #pragma HLS loop_tripcount min=1024 max=1024
-        newPosition[i] = GIPSAT_POSITION_NONE;
+        newPosition[i] = GIPSAT_LINK_NONE;
     }
 
     unsigned int active = 0;
@@ -664,7 +669,7 @@ void gipsatSwitchToHeap(const unsigned int* decisionDomain,
 
     APPEND_OUTSIDE_DOMAIN: for(unsigned int variable = 1; variable <= NUM_LITERALS; variable++){
         #pragma HLS loop_tripcount min=1024 max=1024
-        if(newPosition[variable-1] == GIPSAT_POSITION_NONE){
+        if(newPosition[variable-1] == GIPSAT_LINK_NONE){
             const pqData value = gipsatActivity(mPriorityQueue, mPositioning, activityHeapSize, variable);
             mPriorityQueue[1][active] = value;
             newPosition[variable-1] = active++;
