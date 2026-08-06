@@ -429,6 +429,8 @@ void loadGipsatBuckets(pqPosition mPositioning[_FPGA_MAX_LITERALS],
     activityHeapSize = 0;
     LOAD_BUCKET_DOMAIN: for(unsigned int i = 0; i < NUM_DOMAIN_LITERALS; i++){
         #pragma HLS loop_tripcount min=1 max=1024
+        // Preserve the loop-carried bucket-head value across the generated RTL pipeline.
+        #pragma HLS pipeline II=2
         const unsigned int variable = decisionDomain[i];
         bucketState[variable-1][0] = 1;
         bucketNext[variable-1] = bucketHeads[0];

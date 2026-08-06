@@ -12,7 +12,7 @@ void pqHandler(const unsigned int* decision_domain, int num_literals, int num_do
     #pragma HLS INTERFACE axis port=input
     #pragma HLS INTERFACE axis port=output
 
-    #pragma HLS INTERFACE m_axi port=decision_domain offset=slave bundle=gmemDomain latency=40
+    #pragma HLS INTERFACE m_axi port=decision_domain offset=slave bundle=gmemDomain latency=40 depth=_FPGA_MAX_LITERALS
     #pragma HLS INTERFACE s_axilite port=decision_domain
     #pragma HLS INTERFACE s_axilite port=num_literals
     #pragma HLS INTERFACE s_axilite port=num_domain_literals
