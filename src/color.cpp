@@ -28,6 +28,7 @@ void colorStream(hls::stream<colorValue>* toStateUpdater,
 
     bool stopSendingRead = false;
     bool didRead = false;
+    bool validTraversal = false;
 
     const unsigned int READ_CHUNK_SIZE=_FPGA_CLS_STATES_PARTITION;
 
@@ -40,8 +41,6 @@ void colorStream(hls::stream<colorValue>* toStateUpdater,
                 didRead = true;
             }
         }
-
-        val = litStore[address/16];
 
         if(state == 0){
             if(readOne.eos || stopSendingRead){
@@ -61,12 +60,18 @@ void colorStream(hls::stream<colorValue>* toStateUpdater,
 
                         once = false;
                         address = readOne.addressStart;
+                        validTraversal = readOne.numElements <=
+                                _FPGA_MAX_LITERAL_ELEMENTS &&
+                            LITERAL_PAGE_SIZE >= 16 &&
+                            LITERAL_PAGE_SIZE <= _FPGA_MAX_LITERAL_ELEMENTS &&
+                            LITERAL_PAGE_SIZE%16 == 0 &&
+                            readOne.addressStart%16 == 0;
                     }
                 }
             }
         }else if(state == 1){
             colorValue put;
-            put.clsID = val.range(32*(pageWalkIndex%16)+32*READ_CHUNK_SIZE-1,32*(pageWalkIndex%16));
+            put.clsID = 0;
             put.litID = readOne.literal;
             put.depthCount = readOne.depthCount;
 
@@ -74,24 +79,42 @@ void colorStream(hls::stream<colorValue>* toStateUpdater,
             put.didSolve = false;
             put.streamEos = false;
 
-            address += READ_CHUNK_SIZE;
-            pageWalkIndex += READ_CHUNK_SIZE;
-            numElementsRead += READ_CHUNK_SIZE;
-            if(pageWalkIndex + (16-READ_CHUNK_SIZE) == LITERAL_PAGE_SIZE){
-                tmpAddr = reg((unsigned int)val.range(511,480));
-            }else if(pageWalkIndex == LITERAL_PAGE_SIZE){
-                pageWalkIndex = 0;
-                put.clsID.range(32*READ_CHUNK_SIZE-1,32*(READ_CHUNK_SIZE-2)) = 0;
-
-                address = tmpAddr;
-                numElementsRead -= 2;
-            }
-            if(numElementsRead >= readOne.numElements){
+            if(!validTraversal || address >= _FPGA_MAX_LITERAL_ELEMENTS){
                 state = 0;
                 numElementsRead = 0;
                 pageWalkIndex = 0;
-
                 put.clsEos = true;
+            }else{
+                val = litStore[address/16];
+                const bool useUpperHalf =
+                    (pageWalkIndex & READ_CHUNK_SIZE) != 0;
+                put.clsID = useUpperHalf
+                    ? val.range(511, 256)
+                    : val.range(255, 0);
+
+                address += READ_CHUNK_SIZE;
+                pageWalkIndex += READ_CHUNK_SIZE;
+                numElementsRead += READ_CHUNK_SIZE;
+                if(pageWalkIndex + (16-READ_CHUNK_SIZE) == LITERAL_PAGE_SIZE){
+                    tmpAddr = reg((unsigned int)val.range(511,480));
+                }else if(pageWalkIndex == LITERAL_PAGE_SIZE){
+                    pageWalkIndex = 0;
+                    put.clsID.range(32*READ_CHUNK_SIZE-1,
+                        32*(READ_CHUNK_SIZE-2)) = 0;
+
+                    address = tmpAddr;
+                    if(tmpAddr%16 != 0){
+                        validTraversal = false;
+                    }
+                    numElementsRead -= 2;
+                }
+                if(numElementsRead >= readOne.numElements){
+                    state = 0;
+                    numElementsRead = 0;
+                    pageWalkIndex = 0;
+
+                    put.clsEos = true;
+                }
             }
 
             if(type == 0){

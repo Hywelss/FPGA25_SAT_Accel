@@ -1,4 +1,10 @@
 #include "learn.h"
+
+void touchLearnDataflowStore(volatile uint64_t store[2]){
+    #pragma HLS inline off
+    store[0]++;
+    store[1]++;
+}
 #include <set>
 
 std::set<lit> resolvedLit;
@@ -53,6 +59,10 @@ void merge_resolution_sort(hls::stream<lit_resolve>& mrsp2Stream, hls::stream<li
             break;
         }
         if(clauseTooLong){
+            continue;
+        }
+        if(!isValidLiteral(readFromClsStore)){
+            clauseTooLong = true;
             continue;
         }
 
@@ -130,7 +140,7 @@ void merge_resolution_sort(hls::stream<lit_resolve>& mrsp2Stream, hls::stream<li
             mrsp2Stream.write((lit_resolve){.literal=readFromClsStore,.resolved=false});
         }
     }
-    if(resolvedHappened == 1){
+    if(resolvedHappened == 1 && isValidLiteral(possibleResolved)){
         mergeScratchPad[abs(possibleResolved)-1].range(_FPGA_MAX_LEARN_ELE_BITS-1,0) = mergeScratchPadResolved;
     }
     
@@ -157,6 +167,9 @@ void merge_resolution_sort_part_2(hls::stream<ap_axiu<32,0,0,0>>& pqHandlerInput
         if(mrsp2Stream.read_nb(get)){
             if(get.literal == 0){
                 break;
+            }
+            if(!isValidLiteral(get.literal)){
+                continue;
             }
 
             literalMetaData getLmd = reg(lmd[reg(abs(get.literal)-1)]);
@@ -234,18 +247,17 @@ void undo_states_and_minimize_task_parallel_wrapper(hls::stream<ap_axiu<32,0,0,0
     hls::stream<ap_axiu<32,0,0,0>>& clauseStoreOutputStream1, hls::stream<ap_axiu<32,0,0,0>>& clauseStoreOutputStream2, volatile uint64_t store[2]){
     #pragma HLS inline off
 
-    store[0]++;
-    store[1]++;
+    hls::stream<lit> splitMinimizeStream[2];
+    #pragma HLS stream variable=splitMinimizeStream depth=2
+    #pragma HLS array_partition variable=splitMinimizeStream dim=0 complete
 
     #pragma HLS dataflow
+
+    touchLearnDataflowStore(store);
 
     undo_states_dataflow_wrapper(pqHandlerInput, clsStates,
         answerStack, lmd, litStore, literalCommit, backtrackHeight, answerStackHeight,
         LITERAL_PAGE_SIZE, POSITIVE_LIT_PHASE_VAL, litStoreAccessStats);
-
-    hls::stream<lit> splitMinimizeStream[2];
-    #pragma HLS stream variable=splitMinimizeStream depth=2
-    #pragma HLS array_partition variable=splitMinimizeStream dim=0 complete
 
     minimize_dispatch(toMinimizeStream,
         splitMinimizeStream, foundAbsolute);
@@ -271,14 +283,14 @@ void undo_states_and_minimize_task_parallel_wrapper(hls::stream<ap_axiu<32,0,0,0
 }
 
 void findNextCls(hls::stream<cls>& nextClauseReg, hls::stream<bool>& stopSignal, 
-    unsigned int& trailEndIndex, const ap_uint<_FPGA_MAX_LEARN_ELE_BITS+2> mergeScratchPad[_FPGA_MAX_LITERALS], const ap_uint<512> validBit[_FPGA_MAX_LITERALS/512],
+    int& trailEndIndex, const ap_uint<_FPGA_MAX_LEARN_ELE_BITS+2> mergeScratchPad[_FPGA_MAX_LITERALS], const ap_uint<512> validBit[_FPGA_MAX_LITERALS/512],
     const lit answerStack[_FPGA_MAX_LITERALS], const cls unitByCls[_FPGA_MAX_LITERALS],
     const literalMinimizeMetaData lmmd[_FPGA_PARALLEL_MINIMIZE][_FPGA_MAX_LITERALS], ap_uint<64>& learnedStats){
     #pragma HLS inline off
 
     int latestHeight = 0;
     bool once = false;
-    unsigned int saveTrailEndIndex;
+    int saveTrailEndIndex = trailEndIndex;
     bool didRead = false;
 
     FIND_NEXT_CLS: for(int i = trailEndIndex; i >= 0; i--){
@@ -294,9 +306,13 @@ void findNextCls(hls::stream<cls>& nextClauseReg, hls::stream<bool>& stopSignal,
         #endif
 
         lit trailLit = reg(answerStack[i]);
+        if(!isValidLiteral(trailLit)){
+            trailEndIndex = i-1;
+            continue;
+        }
         literalMinimizeMetaData getLmmd = reg(lmmd[0][abs(trailLit)-1]);
         ap_uint<2> mergeStatus = mergeScratchPad[abs(trailLit)-1].range(_FPGA_MAX_LEARN_ELE_BITS+1,_FPGA_MAX_LEARN_ELE_BITS);
-        trailEndIndex--;
+        trailEndIndex = i-1;
         learnedStats++;
 
         unsigned int validBitAddrIndex = (abs(trailLit)-1)/512;
@@ -326,11 +342,13 @@ void findNextCls(hls::stream<cls>& nextClauseReg, hls::stream<bool>& stopSignal,
     #endif
 }
 
-void findNextClsCompare(hls::stream<cls>& nextClauseReg, hls::stream<bool>& stopSignal, cls& nextClauseMerge){
+void findNextClsCompare(hls::stream<cls>& nextClauseReg, hls::stream<bool>& stopSignal,
+    cls& nextClauseMerge, bool& foundNextClause){
     #pragma HLS inline off
 
     IO_INSERT:{
     nextClauseMerge = nextClauseReg.read();
+    foundNextClause = nextClauseMerge != 0;
 
     ap_wait();
     #ifdef FPGA_HW
@@ -338,7 +356,7 @@ void findNextClsCompare(hls::stream<cls>& nextClauseReg, hls::stream<bool>& stop
     #endif
     }
 
-    FLUSH_FIND_NEXT_CLS: while(true){
+    FLUSH_FIND_NEXT_CLS: while(foundNextClause){
         #pragma HLS loop_tripcount min=16 max=16
         #pragma HLS pipeline 
 
@@ -349,7 +367,7 @@ void findNextClsCompare(hls::stream<cls>& nextClauseReg, hls::stream<bool>& stop
     }
 }
 
-void findNextClsDataflow(unsigned int& trailEndIndex, cls& nextClauseMerge,
+void findNextClsDataflow(int& trailEndIndex, cls& nextClauseMerge, bool& foundNextClause,
     const ap_uint<_FPGA_MAX_LEARN_ELE_BITS+2> mergeScratchPad[_FPGA_MAX_LITERALS], const ap_uint<512> validBit[_FPGA_MAX_LITERALS/512],
     const lit answerStack[_FPGA_MAX_LITERALS], const cls unitByCls[_FPGA_MAX_LITERALS],
     const literalMinimizeMetaData lmmd[_FPGA_PARALLEL_MINIMIZE][_FPGA_MAX_LITERALS], ap_uint<64>& learnedStats){
@@ -363,7 +381,7 @@ void findNextClsDataflow(unsigned int& trailEndIndex, cls& nextClauseMerge,
     findNextCls(nextClauseReg, stopSignal, 
         trailEndIndex, mergeScratchPad, validBit, answerStack, unitByCls,
         lmmd, learnedStats);
-    findNextClsCompare(nextClauseReg, stopSignal, nextClauseMerge);
+    findNextClsCompare(nextClauseReg, stopSignal, nextClauseMerge, foundNextClause);
 }
 
 void writeClauseStream(hls::stream<ap_int<96>>& toSaveClauseStream, hls::stream<lit>& litNewPage,
@@ -394,22 +412,21 @@ void writeClauseStream(hls::stream<ap_int<96>>& toSaveClauseStream, hls::stream<
         #pragma HLS dependence variable=lmd inter false
         #pragma HLS dependence variable=lmmd inter false
         
-        literalMetaData newlmd = reg(lmd[abs(resolutionClause[i])-1]);
-        literalMinimizeMetaData newLmmd = lmmd[0][abs(resolutionClause[i])-1];
-
-        bool add = true;
-        for(unsigned int j = 0; j < _FPGA_PARALLEL_MINIMIZE; j++){
-            if(LMMD_MIN_KEEP(lmmd[j][abs(resolutionClause[i])-1].compactlmmd) != 1){
-                add = false;
-            }
+        bool add = false;
+        if(!shouldSaveClauseLiteral(resolutionClause[i], lmmd, add)){
+            continue;
         }
+
+        const unsigned int variable = abs(resolutionClause[i])-1;
+        literalMetaData newlmd = reg(lmd[variable]);
+        literalMinimizeMetaData newLmmd = lmmd[0][variable];
 
         ap_uint<1> selectSide = 0;
         if(resolutionClause[i] < 0){
             selectSide = 1;
         }
 
-        if(LMMD_IS_IN_FIX_STACK(newLmmd.compactlmmd) == 0 && add){
+        if(add){
             lit getLit = resolutionClause[i];
 
             if(isConstraintActivationLiteral(getLit, constraintActivation)){
@@ -458,9 +475,9 @@ void writeClauseStream(hls::stream<ap_int<96>>& toSaveClauseStream, hls::stream<
         }
         LMMD_MIN_KEEP(newLmmd.compactlmmd) = 0;
 
-        lmd[abs(resolutionClause[i])-1] = reg(newlmd);
+        lmd[variable] = reg(newlmd);
         for(unsigned int j = 0; j < _FPGA_PARALLEL_MINIMIZE; j++){
-            lmmd[j][abs(resolutionClause[i])-1] = newLmmd;
+            lmmd[j][variable] = newLmmd;
         }
     }
     if(registerInLearntBuckets && !containsConstraintActivation){
@@ -658,12 +675,13 @@ void learnClause(clsState clsStates[_FPGA_CLS_STATES_PARTITION][_FPGA_MAX_CLAUSE
     #endif
 
     ap_axiu<96,0,0,0> sendClauseInputCommand;
+    sendClauseInputCommand.data = 0;
     ap_axiu<32,0,0,0> sendPQHandler;
     sendPQHandler.data = pq::UPDATE;
     pqHandlerInput.write(sendPQHandler);
     
     unsigned int numElements = 0;
-    cls nextClauseMerge;
+    cls nextClauseMerge = 0;
 
     volatile uint64_t store[2];
     sendTime(timerValueStream, conditionStream, 1, &store[0]);
@@ -675,9 +693,18 @@ void learnClause(clsState clsStates[_FPGA_CLS_STATES_PARTITION][_FPGA_MAX_CLAUSE
     clauseStoreInputStream1.write(sendClauseInputCommand);
 
     unsigned int numElementsMyStream = unsatClauses.head;
+    if(numElementsMyStream == 0){
+        error = -9;
+    }
     GET_SHORTEST_START: for(unsigned int i = 0; i < numElementsMyStream; i++){
         #pragma HLS loop_tripcount min=16 max=16
         cls possibleStart = unsatClauses.array[i];
+
+        if(possibleStart <= 0 ||
+                (unsigned int)possibleStart > _FPGA_MAX_CLAUSES){
+            error = -9;
+            continue;
+        }
 
         sendClauseInputCommand.data.range(31,0) = possibleStart-1;
         sendClauseInputCommand.data.range(63,32) = 0;
@@ -702,7 +729,7 @@ void learnClause(clsState clsStates[_FPGA_CLS_STATES_PARTITION][_FPGA_MAX_CLAUSE
     bool clauseTooLong = false;
 
     unsigned int streamSize = 0;
-    unsigned int trailEndIndex = 0;
+    int trailEndIndex = 0;
     unsigned int highestIL = 0;
     unsigned int fixedStackCount = 0;
     unsigned int backtrackHeight = 0;
@@ -719,6 +746,15 @@ void learnClause(clsState clsStates[_FPGA_CLS_STATES_PARTITION][_FPGA_MAX_CLAUSE
         #pragma HLS loop_tripcount min=1024 max=1024
 
         if(isUIP || foundAbsolute){
+            break;
+        }
+
+        if(error < 0){
+            break;
+        }
+        if(nextClauseMerge <= 0 ||
+                (unsigned int)nextClauseMerge > _FPGA_MAX_CLAUSES){
+            error = -9;
             break;
         }
 
@@ -754,9 +790,15 @@ void learnClause(clsState clsStates[_FPGA_CLS_STATES_PARTITION][_FPGA_MAX_CLAUSE
         if(streamSize == 1){
             isUIP = true;
         }else{
-            findNextClsDataflow(trailEndIndex, nextClauseMerge,
+            bool foundNextClause = false;
+            findNextClsDataflow(trailEndIndex, nextClauseMerge, foundNextClause,
                 mergeScratchPadLearn, validBitLearn, answerStack, unitByCls,
                 lmmd, learnedStats[1]);
+            if(!foundNextClause || nextClauseMerge <= 0 ||
+                    (unsigned int)nextClauseMerge > _FPGA_MAX_CLAUSES){
+                error = -9;
+                break;
+            }
             streamSize--;
         }
     }
@@ -771,7 +813,7 @@ void learnClause(clsState clsStates[_FPGA_CLS_STATES_PARTITION][_FPGA_MAX_CLAUSE
     }
     overhead += clearIterations;
 
-    if(error == -2){
+    if(error < 0){
         sendClauseInputCommand.data.range(31,0) = 0;
         sendClauseInputCommand.data.range(63,32) = 0;
         sendClauseInputCommand.data.range(95,64) = csh::EXIT;
@@ -785,13 +827,19 @@ void learnClause(clsState clsStates[_FPGA_CLS_STATES_PARTITION][_FPGA_MAX_CLAUSE
     hls::stream<lit> toMinimizeStream;
     #pragma HLS stream variable=toMinimizeStream depth=_FPGA_MAX_LEARN_ELE
 
-    int levelBefore = -1;
+    // GipSAT backtracks a unit learnt clause to level zero.  Starting from
+    // zero also keeps a missing second-highest level from becoming index -1.
+    int levelBefore = 0;
     if(!resetAll && !foundAbsolute){
         GET_BT_LEVEL: for(unsigned int i = 0; i < numElements; i++){
             #pragma HLS loop_tripcount min=1024 max=1024
             #pragma HLS pipeline
         
             const lit getLit = resolutionClause[i];
+            if(!isValidLiteral(getLit)){
+                error = -9;
+                continue;
+            }
             const literalMetaData getLmd = reg(lmd[abs(getLit)-1]);
             const literalMinimizeMetaData getlmmd = lmmd[0][abs(getLit)-1];
 
@@ -811,13 +859,20 @@ void learnClause(clsState clsStates[_FPGA_CLS_STATES_PARTITION][_FPGA_MAX_CLAUSE
                 toMinimizeStream.write(getLit);
             }
         }
-        backtrackHeight = answerStackHeight-lmd[levelBefore].decisionLevelStackEnd;
+        if(!computeBacktrackHeight(levelBefore, answerStackHeight, lmd,
+                backtrackHeight)){
+            error = -9;
+        }
     }else{
         if(foundAbsolute){
             FIND_ABSOLUTE: for(unsigned int i = 0; i < numElements; i++){
                 #pragma HLS loop_tripcount min=1024 max=1024
                 #pragma HLS pipeline
         
+                if(!isValidLiteral(resolutionClause[i])){
+                    error = -9;
+                    continue;
+                }
                 const literalMinimizeMetaData getlmmd = lmmd[0][abs(resolutionClause[i])-1];
 
                 if(LMMD_IS_IN_FIX_STACK(getlmmd.compactlmmd) == 0){
@@ -830,6 +885,10 @@ void learnClause(clsState clsStates[_FPGA_CLS_STATES_PARTITION][_FPGA_MAX_CLAUSE
                 #pragma HLS pipeline
         
                 const lit getLit = resolutionClause[i];
+                if(!isValidLiteral(getLit)){
+                    error = -9;
+                    continue;
+                }
                 const literalMetaData getLmd = reg(lmd[abs(getLit)-1]);
                 const literalMinimizeMetaData getlmmd = lmmd[0][abs(getLit)-1];
 
@@ -842,11 +901,22 @@ void learnClause(clsState clsStates[_FPGA_CLS_STATES_PARTITION][_FPGA_MAX_CLAUSE
                 }
             }
         }
-        backtrackHeight = answerStackHeight-lmd[0].decisionLevelStackEnd;
+        if(!computeBacktrackHeight(0, answerStackHeight, lmd,
+                backtrackHeight)){
+            error = -9;
+        }
     }
 
     sendTime(timerValueStream, conditionStream, 1, &store[1]);
     cycleCounter[3] += store[1]-store[0];
+
+    if(error < 0){
+        sendClauseInputCommand.data = 0;
+        sendClauseInputCommand.data.range(95,64) = csh::EXIT;
+        clauseStoreInputStream1.write(sendClauseInputCommand);
+        clauseStoreInputStream2.write(sendClauseInputCommand);
+        return;
+    }
 
     sendTime(timerValueStream, conditionStream, 1, &store[0]);
 
@@ -894,6 +964,22 @@ void learnClause(clsState clsStates[_FPGA_CLS_STATES_PARTITION][_FPGA_MAX_CLAUSE
     sendTime(timerValueStream, conditionStream, 1, &store[1]);
     cycleCounter[4] += store[1]-store[0];
 
+    unsigned int savedLiteralCount = 0;
+    if(foundAbsolute &&
+            (!isValidLiteral(insertPropagate[0]) ||
+             (unsigned int)abs(insertPropagate[0]) > NUM_LITERALS ||
+             answerStackHeight >= NUM_LITERALS)){
+        error = -9;
+        return;
+    }
+    if(!foundAbsolute &&
+            !countSavedClauseLiterals(resolutionClause, numElements,
+                NUM_LITERALS, lmmd, savedLiteralCount)){
+        error = -9;
+        return;
+    }
+    nonRemovableCount = savedLiteralCount;
+
     unsigned int removeCount = 0;
     lit possibleFixedLiteral = 0;
 
@@ -914,6 +1000,7 @@ void learnClause(clsState clsStates[_FPGA_CLS_STATES_PARTITION][_FPGA_MAX_CLAUSE
         newClauseState.remainingUnassigned = 0;
 
         ap_axiu<96,0,0,0> sendClauseInputCommand;
+        sendClauseInputCommand.data = 0;
         sendClauseInputCommand.data.range(31,0) = nonRemovableCount;
         sendClauseInputCommand.data.range(95,64) = csh::SAVE;
 
@@ -951,6 +1038,11 @@ void learnClause(clsState clsStates[_FPGA_CLS_STATES_PARTITION][_FPGA_MAX_CLAUSE
     
         decisionLevel = levelBefore;
         if(!resetAll){
+            if(!isValidLiteral(possibleUIPLit) ||
+                    (unsigned int)abs(possibleUIPLit) > NUM_LITERALS){
+                error = -9;
+                return;
+            }
             newClauseState.remainingUnassigned = 1;
             newClauseState.compressedList = insertPropagate[1];
         }

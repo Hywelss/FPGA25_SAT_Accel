@@ -60,6 +60,7 @@ void calculate(hls::stream<ap_axiu<32,0,0,0>>& value, hls::stream<ap_axiu<1,0,0,
         #else
         count++;
         ap_axiu<1,0,0,0> pkt;
+        pkt.data = 0;
         stop.read_nb(pkt);
         if(pkt.data){
             break;

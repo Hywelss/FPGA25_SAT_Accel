@@ -129,6 +129,11 @@ bool installQueryClauses(const lit* queryClauseStore,
             #pragma HLS loop_tripcount min=1 max=1024
             #pragma HLS pipeline II=1
             const lit literal = sourceClause[i];
+            if(literal == 0 || literal > (lit)numLiterals ||
+                    literal < -(lit)numLiterals){
+                error = -6;
+                return false;
+            }
             const literalMetaData metadata = lmd[abs(literal)-1];
             if(LMD_IS_IN_STACK(metadata.compactlmd) && LMD_DEC_LVL(metadata.compactlmd) == 0){
                 const lit assigned = answerStack[(unsigned int)LMD_INSERT_LVL(metadata.compactlmd)];
@@ -177,6 +182,7 @@ bool installQueryClauses(const lit* queryClauseStore,
         }
 
         ap_axiu<96,0,0,0> saveCommand;
+        saveCommand.data = 0;
         saveCommand.data.range(31,0) = clauseLength;
         saveCommand.data.range(95,64) = csh::SAVE;
         clauseStoreInputStream1.write(saveCommand);
@@ -210,6 +216,10 @@ bool installQueryClauses(const lit* queryClauseStore,
             }
         }
         if(clauseLength == 1){
+            if(fixedDecisionStackHeight >= numLiterals){
+                error = -6;
+                return false;
+            }
             answerStack[fixedDecisionStackHeight++] = reducedClause[0];
             if(!isTemporary){
                 permanentRootCount++;
@@ -320,10 +330,28 @@ void solver(const unsigned int* decision_domain, int num_domain_literals,
     static bool permanentFormulaUnsat = false;
     static int decisionLevel = 1;
     static bool firstIteration = false;
-    bool initialTrackerError = false;
+    const bool validLiteralPageSize = LITERAL_PAGE_SIZE >= 16 &&
+        LITERAL_PAGE_SIZE <= _FPGA_MAX_LITERAL_ELEMENTS &&
+        LITERAL_PAGE_SIZE%16 == 0;
+    const uint64_t declaredClauseCount =
+        (uint64_t)NUM_PERMANENT_CLAUSES + NUM_TEMPORARY_CLAUSES;
+    const bool validQueryRange = declaredClauseCount <= UINT_MAX &&
+        miscCounters[13] <= declaredClauseCount;
+    const bool validConfiguration = literalElements <= _FPGA_MAX_LITERAL_ELEMENTS &&
+        numClauses <= _FPGA_MAX_CLAUSES && NUM_LITERALS <= _FPGA_MAX_LITERALS &&
+        num_domain_literals >= 0 &&
+        (unsigned int)num_domain_literals <= NUM_LITERALS &&
+        MAX_LITERAL_ELEMENTS <= _FPGA_MAX_LITERAL_ELEMENTS &&
+        literalElements <= MAX_LITERAL_ELEMENTS && validLiteralPageSize &&
+        NUM_PERMANENT_CLAUSES <= _FPGA_MAX_CLAUSES &&
+        NUM_TEMPORARY_CLAUSES <= _FPGA_MAX_CLAUSES-NUM_PERMANENT_CLAUSES &&
+        declaredClauseCount <= numClauses &&
+        NUM_ASSUMPTIONS <= NUM_LITERALS && miscCounters[3] <= NUM_LITERALS &&
+        validQueryRange;
+    bool initialTrackerError = !validConfiguration;
 
     sendTime(timerValueStream, conditionStream, 1, &store[0]);
-    if(SESSION_RESET){
+    if(SESSION_RESET && validConfiguration){
         freeLitPageAddresses.reset(literalElements,_FPGA_MAX_LITERAL_ELEMENTS,LITERAL_PAGE_SIZE);
         copy_in_dataflow_wrapper(mClsStates, mLitStore, mlmd, mlmmd,
             mAnswerStack, clsStates, litStore, lmd, answerStack,
@@ -336,10 +364,6 @@ void solver(const unsigned int* decision_domain, int num_domain_literals,
         decisionLevel = (fixedDecisionStackHeight == 0) ? 1 : 0;
         firstIteration = false;
         clearTemporaryClauseTracker(temporaryClauseMask, temporaryClauseCount);
-        if(NUM_PERMANENT_CLAUSES > _FPGA_MAX_CLAUSES ||
-           NUM_TEMPORARY_CLAUSES > _FPGA_MAX_CLAUSES - NUM_PERMANENT_CLAUSES){
-            initialTrackerError = true;
-        }
         INITIAL_TEMPORARY_IDS: for(unsigned int i = 0;
                 i < NUM_TEMPORARY_CLAUSES && !initialTrackerError; i++){
             #pragma HLS loop_tripcount min=0 max=1024
@@ -348,8 +372,15 @@ void solver(const unsigned int* decision_domain, int num_domain_literals,
                 initialTrackerError = true;
             }
         }
-    }else{
+    }else if(validConfiguration){
         copy_domain(mInDomain, decision_domain, NUM_LITERALS, num_domain_literals);
+    }
+
+    if(answerStackHeight > NUM_LITERALS ||
+            fixedDecisionStackHeight > NUM_LITERALS ||
+            permanentRootCount > NUM_LITERALS ||
+            fixedDecisionStackHeight < permanentRootCount){
+        initialTrackerError = true;
     }
 
     sendTime(timerValueStream, conditionStream, 1, &store[1]);
@@ -392,12 +423,13 @@ void solver(const unsigned int* decision_domain, int num_domain_literals,
             ap_axiu<32,0,0,0> pqCommand;
             pqCommand.data = pq::UNHIDE_ELE;
             pqHandlerInput.write(pqCommand);
-            const unsigned int backtrackHeight = answerStackHeight - permanentRootCount;
-            const lit firstRemovedLiteral = mAnswerStack[answerStackHeight-1];
-            undo_states_dataflow_wrapper(pqHandlerInput, mClsStates,
-                mAnswerStack, mlmd, mLitStore, firstRemovedLiteral,
-                backtrackHeight, answerStackHeight, LITERAL_PAGE_SIZE,
+            const bool cleanupOk = cleanupQueryAssignments(pqHandlerInput,
+                mClsStates, mAnswerStack, mlmd, mLitStore,
+                permanentRootCount, answerStackHeight, LITERAL_PAGE_SIZE,
                 POSITIVE_LIT_PHASE_VAL, litStoreAccessStats);
+            if(!cleanupOk){
+                setupStatus = -6;
+            }
             pqCommand.data = pq::EXIT;
             pqHandlerInput.write(pqCommand);
         }
@@ -405,45 +437,73 @@ void solver(const unsigned int* decision_domain, int num_domain_literals,
         if(temporaryClauseCount > _FPGA_MAX_CLAUSES){
             setupStatus = -6;
         }else if(temporaryClauseCount > 0){
+            const unsigned int declaredTemporaryCount = temporaryClauseCount;
             ap_axiu<96,0,0,0> deleteCommand;
-            deleteCommand.data.range(31,0) = temporaryClauseCount;
+            deleteCommand.data = 0;
+            deleteCommand.data.range(31,0) = declaredTemporaryCount;
             deleteCommand.data.range(95,64) = csh::DELETE_IDS;
             clauseStoreInputStream1.write(deleteCommand);
-            unsigned int deletedClauseCount = 0;
-            SEND_TEMPORARY_DELETE_IDS: for(unsigned int clauseID = 0;
+
+            const unsigned int acceptedDeleteCount =
+                clauseStoreOutputStream1.read().data;
+            unsigned int emittedDeleteCount = 0;
+            unsigned int remainingTemporaryCount = 0;
+            EMIT_AND_DELETE_TEMPORARY_CLAUSES: for(unsigned int clauseID = 0;
                     clauseID < _FPGA_MAX_CLAUSES; clauseID++){
                 #pragma HLS loop_tripcount min=0 max=131072
-                #pragma HLS pipeline II=1
-                if(temporaryClauseMask[clauseID] != 0){
+                if(temporaryClauseMask[clauseID] == 0){
+                    continue;
+                }
+                if(emittedDeleteCount < acceptedDeleteCount){
                     ap_axiu<96,0,0,0> idCommand;
+                    idCommand.data = 0;
                     idCommand.data.range(31,0) = clauseID;
                     clauseStoreInputStream2.write(idCommand);
+                    deleteOneTransposedClause(mLitStore, mlmd,
+                        freeLitPageAddresses, LITERAL_PAGE_SIZE,
+                        clauseStoreInputStream1, clauseStoreOutputStream1,
+                        locationOutputStream);
                     temporaryClauseMask[clauseID] = 0;
-                    deletedClauseCount++;
-                    if(deletedClauseCount == temporaryClauseCount){
-                        break;
-                    }
+                    emittedDeleteCount++;
+                }else{
+                    remainingTemporaryCount++;
                 }
             }
-            deleteTransposedClauses(mLitStore, mlmd, freeLitPageAddresses,
-                LITERAL_PAGE_SIZE, clauseStoreInputStream1,
-                clauseStoreOutputStream1, locationOutputStream);
-            temporaryClauseCount = 0;
+            PAD_AND_DELETE_TEMPORARY_CLAUSES: while(
+                    emittedDeleteCount < acceptedDeleteCount){
+                #pragma HLS loop_tripcount min=0 max=131072
+                ap_axiu<96,0,0,0> invalidID;
+                invalidID.data = 0;
+                invalidID.data.range(31,0) = _FPGA_MAX_CLAUSES;
+                clauseStoreInputStream2.write(invalidID);
+                deleteOneTransposedClause(mLitStore, mlmd,
+                    freeLitPageAddresses, LITERAL_PAGE_SIZE,
+                    clauseStoreInputStream1, clauseStoreOutputStream1,
+                    locationOutputStream);
+                emittedDeleteCount++;
+            }
+            temporaryClauseCount = remainingTemporaryCount;
+            if(acceptedDeleteCount != declaredTemporaryCount ||
+                    emittedDeleteCount != declaredTemporaryCount ||
+                    remainingTemporaryCount != 0){
+                setupStatus = -6;
+            }
         }
-        int setupError = 0;
-        const bool queryUnsat = installQueryClauses(queryClauseStore, queryCmd,
-            miscCounters[13], NUM_PERMANENT_CLAUSES + NUM_TEMPORARY_CLAUSES,
-            NUM_PERMANENT_CLAUSES,
-            mClsStates, mLitStore, mlmd, mAnswerStack,
-            fixedDecisionStackHeight, permanentRootCount, permanentFormulaUnsat,
-            freeLitPageAddresses, temporaryClauseMask, temporaryClauseCount,
-            NUM_LITERALS, LITERAL_PAGE_SIZE, setupError,
-            clauseStoreInputStream1, clauseStoreOutputStream1);
-        if(setupError < 0){
-            setupStatus = setupError;
-        }
-        if(queryUnsat){
-            setupStatus = -7;
+        if(setupStatus == 0){
+            int setupError = 0;
+            const bool queryUnsat = installQueryClauses(queryClauseStore, queryCmd,
+                miscCounters[13], (unsigned int)declaredClauseCount,
+                NUM_PERMANENT_CLAUSES,
+                mClsStates, mLitStore, mlmd, mAnswerStack,
+                fixedDecisionStackHeight, permanentRootCount, permanentFormulaUnsat,
+                freeLitPageAddresses, temporaryClauseMask, temporaryClauseCount,
+                NUM_LITERALS, LITERAL_PAGE_SIZE, setupError,
+                clauseStoreInputStream1, clauseStoreOutputStream1);
+            if(setupError < 0){
+                setupStatus = setupError;
+            }else if(queryUnsat){
+                setupStatus = -7;
+            }
         }
         const bool hasNewPermanentRoots = fixedDecisionStackHeight > answerStackHeight;
         decisionLevel = hasNewPermanentRoots ? 0 : 1;
@@ -480,6 +540,7 @@ void solver(const unsigned int* decision_domain, int num_domain_literals,
         messageValue.data.range(31,0) = setupStatus == -7 ? -1 : setupStatus;
         messageStream.write(messageValue);
         ap_axiu<96,0,0,0> clauseCommand;
+        clauseCommand.data = 0;
         clauseCommand.data.range(95,64) = csh::EXIT;
         clauseStoreInputStream1.write(clauseCommand);
         return;
@@ -538,8 +599,15 @@ void solver(const unsigned int* decision_domain, int num_domain_literals,
 
                 if((unsigned int)decisionLevel <= NUM_ASSUMPTIONS){
                     topLiteral = assumptions[decisionLevel-1];
-                    getLmd = mlmd[abs(topLiteral)-1];
-                    if(LMD_IS_IN_STACK(getLmd.compactlmd)){
+                    const bool validAssumption = topLiteral != 0 &&
+                        topLiteral <= (lit)NUM_LITERALS &&
+                        topLiteral >= -(lit)NUM_LITERALS;
+                    if(!validAssumption){
+                        assumptionConflict = true;
+                    }else{
+                        getLmd = mlmd[abs(topLiteral)-1];
+                    }
+                    if(validAssumption && LMD_IS_IN_STACK(getLmd.compactlmd)){
                         const lit assigned = mAnswerStack[(unsigned int)LMD_INSERT_LVL(getLmd.compactlmd)];
                         if(assigned != topLiteral){
                             assumptionConflict = true;
@@ -553,14 +621,16 @@ void solver(const unsigned int* decision_domain, int num_domain_literals,
                             continue;
                         }
                     }
-                    forceLiteralPhase = true;
-                    ap_axiu<32,0,0,0> assumptionCommand;
-                    assumptionCommand.data = pq::HIDE_ELE;
-                    pqHandlerInput.write(assumptionCommand);
-                    assumptionCommand.data = abs(topLiteral);
-                    pqHandlerInput.write(assumptionCommand);
-                    assumptionCommand.data = pq::EXIT;
-                    pqHandlerInput.write(assumptionCommand);
+                    if(!assumptionConflict){
+                        forceLiteralPhase = true;
+                        ap_axiu<32,0,0,0> assumptionCommand;
+                        assumptionCommand.data = pq::HIDE_ELE;
+                        pqHandlerInput.write(assumptionCommand);
+                        assumptionCommand.data = abs(topLiteral);
+                        pqHandlerInput.write(assumptionCommand);
+                        assumptionCommand.data = pq::EXIT;
+                        pqHandlerInput.write(assumptionCommand);
+                    }
                 }
                 
                 FIND_TOP: while(!forceLiteralPhase && !doBackTrack){
@@ -579,6 +649,13 @@ void solver(const unsigned int* decision_domain, int num_domain_literals,
                     topLiteral = getPQHandler.data;
                     if(topLiteral == pq::DOMAIN_EXHAUSTED){
                         domainExhausted = true;
+                        break;
+                    }
+                    if(topLiteral <= 0 || (unsigned int)topLiteral > NUM_LITERALS){
+                        // Enter the normal learning-error cleanup path without
+                        // indexing metadata with an invalid queue result.
+                        domainExhausted = true;
+                        doBackTrack = true;
                         break;
                     }
                     getLmd = mlmd[topLiteral-1];     
@@ -629,6 +706,7 @@ void solver(const unsigned int* decision_domain, int num_domain_literals,
                 messageValue.data.range(31,0) = coreExtracted ? -1 : -8;
                 messageStream.write(messageValue);
                 ap_axiu<96,0,0,0> sendClauseInputCommand;
+                sendClauseInputCommand.data = 0;
                 sendClauseInputCommand.data.range(95,64) = csh::EXIT;
                 clauseStoreInputStream1.write(sendClauseInputCommand);
                 return;
@@ -638,6 +716,7 @@ void solver(const unsigned int* decision_domain, int num_domain_literals,
                 sendTime(timerValueStream, conditionStream, 1, &store[0]);
 
                 ap_axiu<96,0,0,0> sendClauseInputCommand;
+                sendClauseInputCommand.data = 0;
                 sendClauseInputCommand.data.range(31,0) = 0;
                 sendClauseInputCommand.data.range(95,64) = csh::SEND_LEN_BCP;
                 clauseStoreInputStream1.write(sendClauseInputCommand);
@@ -718,6 +797,7 @@ void solver(const unsigned int* decision_domain, int num_domain_literals,
                     messageStream.write(messageValue);
 
                     ap_axiu<96,0,0,0> sendClauseInputCommand;
+                    sendClauseInputCommand.data = 0;
                     sendClauseInputCommand.data.range(95,64) = csh::EXIT;
 
                     clauseStoreInputStream1.write(sendClauseInputCommand);
@@ -766,6 +846,7 @@ void solver(const unsigned int* decision_domain, int num_domain_literals,
                 messageStream.write(messageValue);
 
                 ap_axiu<96,0,0,0> sendClauseInputCommand;
+                sendClauseInputCommand.data = 0;
                 sendClauseInputCommand.data.range(95,64) = csh::EXIT;
 
                 clauseStoreInputStream1.write(sendClauseInputCommand);
@@ -852,6 +933,7 @@ void solver(const unsigned int* decision_domain, int num_domain_literals,
                 sendTime(timerValueStream, conditionStream, 0, nullptr);
 
                 ap_axiu<96,0,0,0> sendClauseInputCommand;
+                sendClauseInputCommand.data = 0;
                 sendClauseInputCommand.data.range(95,64) = csh::EXIT;
 
                 clauseStoreInputStream1.write(sendClauseInputCommand);
@@ -870,6 +952,7 @@ void solver(const unsigned int* decision_domain, int num_domain_literals,
                 decisionLevel = 0;
 
                 ap_axiu<96,0,0,0> sendClauseInputCommand;
+                sendClauseInputCommand.data = 0;
                 sendClauseInputCommand.data.range(95,64) = csh::DELETE;
 
                 clauseStoreInputStream1.write(sendClauseInputCommand);
@@ -906,6 +989,39 @@ void solver(const unsigned int* decision_domain, int num_domain_literals,
                 useFlipped = true;
 
                 litToCheck.literal = insertPropagate[1];
+                if(!isValidLiteral(litToCheck.literal) ||
+                        (unsigned int)abs(litToCheck.literal) > NUM_LITERALS ||
+                        givenClsID < 0 ||
+                        (unsigned int)givenClsID >= _FPGA_MAX_CLAUSES){
+                    miscCounters[0] = totalCount;
+                    miscCounters[1] = decideCount;
+                    miscCounters[2] = retryCount;
+                    miscCounters[3] = backtrackCount;
+                    miscCounters[4] = resetCount;
+                    miscCounters[5] = answerStackHeight;
+                    copyStats(learnedStats, longestClause, litStoreAccessStats,
+                        cycleCounter, miscCounters);
+                    messageValue.data = 0;
+                    messageValue.data.range(31,0) = -9;
+                    messageStream.write(messageValue);
+                    ap_axiu<1,0,0,0> stopPacket;
+                    stopPacket.data = 1;
+                    stopStream.write(stopPacket);
+                    sendPQHandler.data = pq::EXIT;
+                    pqHandlerInput.write(sendPQHandler);
+                    FLUSH_RESTART_INVALID_PROPAGATE: while(true){
+                        #pragma HLS loop_tripcount min=16 max=16
+                        if(restartValueStream.read().data == 0){
+                            break;
+                        }
+                    }
+                    sendTime(timerValueStream, conditionStream, 0, nullptr);
+                    ap_axiu<96,0,0,0> exitCommand;
+                    exitCommand.data = 0;
+                    exitCommand.data.range(95,64) = csh::EXIT;
+                    clauseStoreInputStream1.write(exitCommand);
+                    return;
+                }
                 litToCheck.lmd = mlmd[abs(litToCheck.literal)-1];
                 litToCheck.lmmd = mlmmd[0][abs(litToCheck.literal)-1];
 

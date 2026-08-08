@@ -23,7 +23,7 @@ run_query() {
         "$ROOT/tests/unsat_core_queries/$name.cnf" "$METRICS" 0 \
         >"$log"
     rg -q '^s UNSATISFIABLE$' "$log"
-    rg -q "^u${expected_core:+ $expected_core} 0$" "$log"
+    rg -q -e "^u${expected_core:+ $expected_core} 0$" "$log"
 }
 
 run_query 01_irrelevant_assumption '(1 3|3 1)'

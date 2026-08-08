@@ -116,6 +116,27 @@ inline bool parseSignedDecimal(const std::string& text, int& value){
     return true;
 }
 
+inline bool validateTemporaryClauseLengths(
+    const std::vector<std::vector<int>>& clauses,
+    const unsigned int permanentClauseCount,
+    const unsigned int temporaryClauseCount,
+    const unsigned int maximumClauseLength,
+    std::size_t& invalidClauseIndex){
+    const uint64_t temporaryEnd =
+        static_cast<uint64_t>(permanentClauseCount) + temporaryClauseCount;
+    if(temporaryEnd > clauses.size()){
+        return false;
+    }
+    for(std::size_t clauseIndex = permanentClauseCount;
+            clauseIndex < temporaryEnd; clauseIndex++){
+        if(clauses[clauseIndex].size() > maximumClauseLength){
+            invalidClauseIndex = clauseIndex;
+            return false;
+        }
+    }
+    return true;
+}
+
 inline bool validateFpgaPartialModel(
     const unsigned int numVariables,
     const std::vector<std::vector<int>>& clauses,

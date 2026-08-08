@@ -55,6 +55,15 @@ void drain(InputStream& stream) {
     }
 }
 
+void expectDualExit(InputStream& input1, InputStream& input2) {
+    assert(!input1.empty() && !input2.empty());
+    const auto exit1 = input1.read();
+    const auto exit2 = input2.read();
+    assert((int)exit1.data.range(95, 64) == csh::EXIT);
+    assert((int)exit2.data.range(95, 64) == csh::EXIT);
+    assert(input1.empty() && input2.empty());
+}
+
 std::vector<lit> extract(unsigned int assumptionCount,
                          unsigned int trailHeight,
                          myStream<cls, 64, 7>& conflicts,
@@ -69,8 +78,12 @@ std::vector<lit> extract(unsigned int assumptionCount,
         conflictingAssumptionIndex, kNumLiterals, input1, input2,
         clauseOutput);
     assert(ok);
-    drain(input1);
-    drain(input2);
+    // The first lane also contains the command that opens the read session and
+    // any reason-clause requests.  Both lanes must end in exactly one exit.
+    while(input1.size() > 1){
+        input1.read();
+    }
+    expectDualExit(input1, input2);
     assert(clauseOutput.empty());
     return std::vector<lit>(coreOutput, coreOutput + coreCount);
 }
@@ -185,8 +198,10 @@ void testRejectsOutOfRangeTrailLiteralBeforeIndexing() {
         unitByCls, conflicts, -1, kNumLiterals, input1, input2, output);
 
     assert(!ok);
-    drain(input1);
-    drain(input2);
+    while(input1.size() > 1){
+        input1.read();
+    }
+    expectDualExit(input1, input2);
     assert(output.empty());
 }
 
@@ -212,9 +227,34 @@ void testRejectsCoreOutputBeyondAssumptionCapacity() {
 
     assert(!ok);
     assert(coreCount == 1);
-    drain(input1);
-    drain(input2);
+    while(input1.size() > 1){
+        input1.read();
+    }
+    expectDualExit(input1, input2);
     assert(output.empty());
+}
+
+void testRejectsInvalidReasonClauseBeforeRequest() {
+    resetState();
+    myStream<cls, 64, 7> conflicts;
+    conflicts.head = 1;
+    conflicts.tail = 0;
+    conflicts.array[0] = _FPGA_MAX_CLAUSES + 1;
+    OutputStream output;
+    InputStream input1;
+    InputStream input2;
+    unsigned int coreCount = 0;
+
+    const bool ok = extractUnsatCore(
+        coreOutput, coreCount, assumptions, 0, trail, 0, lmd, lmmd,
+        unitByCls, conflicts, -1, kNumLiterals, input1, input2, output);
+
+    assert(!ok);
+    assert(output.empty());
+    while(input1.size() > 1){
+        input1.read();
+    }
+    expectDualExit(input1, input2);
 }
 }  // namespace
 
@@ -226,4 +266,5 @@ int main() {
     testRejectsTrailHeightAboveVariableCount();
     testRejectsOutOfRangeTrailLiteralBeforeIndexing();
     testRejectsCoreOutputBeyondAssumptionCapacity();
+    testRejectsInvalidReasonClauseBeforeRequest();
 }

@@ -4,11 +4,7 @@ void minimize_dispatch(hls::stream<lit>& toMinimizeStream,
     hls::stream<lit> splitMinimizeStream[2], bool foundAbsolute){
     #pragma HLS inline off
 
-    if(foundAbsolute){
-        return;
-    }
-    
-    if(!toMinimizeStream.empty()){
+    if(!foundAbsolute && !toMinimizeStream.empty()){
         ap_uint<1> select = 0;
         unsigned int idx = 0;
 
@@ -57,6 +53,11 @@ void minimize_resolution_sort(hls::stream<lit_resolve>& mrsp2Stream, hls::stream
         lit readFromClsStore = fromClsStore.read();
         if(readFromClsStore == 0){
             break;
+        }
+        if(!isValidLiteral(readFromClsStore)){
+            mrsp2Stream.write((lit_resolve){.literal=readFromClsStore,
+                .resolved=false});
+            continue;
         }
         ap_uint<2> mergeStatus = mergeScratchPad[abs(readFromClsStore)-1];
 
@@ -126,6 +127,10 @@ void minimize_resolution_sort_part_2(myStream<lit,_FPGA_MAX_LEARN_ELE,_FPGA_MAX_
             if(get.literal == 0){
                 break;
             }
+            if(!isValidLiteral(get.literal)){
+                hitUnmarkDecided = true;
+                continue;
+            }
 
             if(!get.resolved){
                 literalMinimizeMetaData checkMinimizedLmd = lmmd[abs(get.literal)-1];
@@ -189,6 +194,10 @@ void minimize_dataflow_wrapper_layer_1(hls::stream<lit>& toSplitStream,
     #pragma HLS inline off
 
     if(foundAbsolute){
+        // The dispatcher still sends one terminator to every dataflow lane.
+        // Consume this lane's token so the producer and both consumers retire
+        // the same transaction in hardware.
+        (void)toSplitStream.read();
         return;
     }
     
@@ -203,6 +212,7 @@ void minimize_dataflow_wrapper_layer_1(hls::stream<lit>& toSplitStream,
     myStream<lit,_FPGA_MAX_LEARN_ELE,_FPGA_MAX_LEARN_ELE_BITS> nextLiteralMinimize;
     cls nextClauseMergeMinimize;
     ap_axiu<96,0,0,0> sendClauseInputCommand;
+    sendClauseInputCommand.data = 0;
 
     MINIZE: while(true){
         #pragma HLS loop_tripcount min=32 max=32
@@ -220,6 +230,11 @@ void minimize_dataflow_wrapper_layer_1(hls::stream<lit>& toSplitStream,
                 break;
             }
 
+            if(!isValidLiteral(getLit)){
+                nonRemovableCount++;
+                continue;
+            }
+
             getLmmd = lmmd[abs(getLit)-1];
             nextClauseMergeMinimize = unitByCls[abs(getLit)-1];
             if(LMMD_IS_DECIDE(getLmmd.compactlmmd) == 1 && LMMD_IS_IN_FIX_STACK(getLmmd.compactlmmd) == 0){
@@ -227,6 +242,11 @@ void minimize_dataflow_wrapper_layer_1(hls::stream<lit>& toSplitStream,
             }
 
             if(!(LMMD_IS_IN_FIX_STACK(getLmmd.compactlmmd) == 1 || LMMD_IS_DECIDE(getLmmd.compactlmmd) == 1)){
+                if(nextClauseMergeMinimize <= 0 ||
+                        (unsigned int)nextClauseMergeMinimize > _FPGA_MAX_CLAUSES){
+                    nonRemovableCount++;
+                    continue;
+                }
                 doCompute = true;
             }else{
                 continue;
@@ -249,10 +269,27 @@ void minimize_dataflow_wrapper_layer_1(hls::stream<lit>& toSplitStream,
         bool needClear = false;
 
         if(exitCondition == 0){
-            lit nextLiteral = nextLiteralMinimize.array[nextLiteralMinimize.tail];
-            nextClauseMergeMinimize = unitByCls[nextLiteral-1];
-
-            nextLiteralMinimize.tail++;     
+            if(nextLiteralMinimize.tail >= nextLiteralMinimize.head){
+                doCompute = false;
+                needClear = true;
+                nonRemovableCount++;
+            }else{
+                const lit nextLiteral = nextLiteralMinimize.array[nextLiteralMinimize.tail];
+                nextLiteralMinimize.tail++;
+                if(nextLiteral <= 0 || (unsigned int)nextLiteral > _FPGA_MAX_LITERALS){
+                    doCompute = false;
+                    needClear = true;
+                    nonRemovableCount++;
+                }else{
+                    nextClauseMergeMinimize = unitByCls[nextLiteral-1];
+                    if(nextClauseMergeMinimize <= 0 ||
+                            (unsigned int)nextClauseMergeMinimize > _FPGA_MAX_CLAUSES){
+                        doCompute = false;
+                        needClear = true;
+                        nonRemovableCount++;
+                    }
+                }
+            }
         }else if(exitCondition == 1){
             LMMD_MIN_KEEP(getLmmd.compactlmmd) = 2;
             didSimplify = true;

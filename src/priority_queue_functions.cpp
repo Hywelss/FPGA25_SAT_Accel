@@ -19,6 +19,9 @@ void loadPositioning(pqPosition mPositioning[_FPGA_MAX_LITERALS], pqData mPriori
     MOVE_DOMAIN_TO_FRONT: for(unsigned int i = 0; i < NUM_DOMAIN_LITERALS; i++){
         #pragma HLS loop_tripcount min=1 max=1024
         const unsigned int variable = decisionDomain[i];
+        if(variable == 0 || variable > NUM_LITERALS){
+            continue;
+        }
         const unsigned int oldPosition = mPositioning[variable-1].pos;
         const pqData displaced = mPriorityQueue[0][i];
         const pqData selected = mPriorityQueue[1][oldPosition];
@@ -120,15 +123,19 @@ void swapLower(pqData mPriorityQueue[2][_FPGA_MAX_LITERALS], pqPosition mPositio
         bool childExists[2] = {false, false};
         #pragma HLS array_partition variable=childExists dim=0 complete
 
-        int newPosition = 2*getPosition+1;
-        leftChild = mPriorityQueue[0][newPosition];
-        if(newPosition >= remainingLiterals){
+        unsigned int newPosition = 2*getPosition+1;
+        if(newPosition < remainingLiterals){
+            leftChild = mPriorityQueue[0][newPosition];
+        }else{
+            leftChild.literal = toMoveLower.literal;
             leftChild.score = 0;
         }
         
         newPosition++;
-        rightChild = mPriorityQueue[1][newPosition];
-        if(newPosition >= remainingLiterals){
+        if(newPosition < remainingLiterals){
+            rightChild = mPriorityQueue[1][newPosition];
+        }else{
+            rightChild.literal = toMoveLower.literal;
             rightChild.score = 0;
         }
 
@@ -218,6 +225,9 @@ void hideElement(hls::stream<lit>& input, pqData mPriorityQueue[2][_FPGA_MAX_LIT
             if(getLit == pq::EXIT){
                 break;
             }
+            if(getLit <= 0 || (unsigned int)getLit > _FPGA_MAX_LITERALS){
+                continue;
+            }
 
             pqPosition swapPosition = mPositioning[getLit-1];
             if(swapPosition.pos >= remainingLiterals){
@@ -255,6 +265,9 @@ void unhideElement(hls::stream<lit>& input, pqData mPriorityQueue[2][_FPGA_MAX_L
         
             if(getLit == pq::EXIT){
                 break;
+            }
+            if(getLit <= 0 || (unsigned int)getLit > _FPGA_MAX_LITERALS){
+                continue;
             }
 
             const unsigned int position = mPositioning[getLit-1].pos;
@@ -294,6 +307,9 @@ void decayEveryElement(hls::stream<lit>& input, pqData mPriorityQueue[2][_FPGA_M
         if(input.read_nb(getLit)){
             if(getLit == pq::EXIT){
                 break;
+            }
+            if(getLit <= 0 || (unsigned int)getLit > NUM_LITERALS){
+                continue;
             }
 
             pqPosition position = mPositioning[getLit-1];
@@ -427,16 +443,21 @@ void loadGipsatBuckets(pqPosition mPositioning[_FPGA_MAX_LITERALS],
 
     bucketHead = 0;
     activityHeapSize = 0;
+    gipsatLink firstVariable = 0;
     LOAD_BUCKET_DOMAIN: for(unsigned int i = 0; i < NUM_DOMAIN_LITERALS; i++){
         #pragma HLS loop_tripcount min=1 max=1024
-        // Preserve the loop-carried bucket-head value across the generated RTL pipeline.
-        #pragma HLS pipeline II=2
+        #pragma HLS pipeline off
         const unsigned int variable = decisionDomain[i];
+        if(variable == 0 || variable > NUM_LITERALS ||
+                bucketState[variable-1][0] != 0){
+            continue;
+        }
         bucketState[variable-1][0] = 1;
-        bucketNext[variable-1] = bucketHeads[0];
-        bucketHeads[0] = variable;
+        bucketNext[variable-1] = firstVariable;
+        firstVariable = variable;
         bucketState[variable-1][1] = 1;
     }
+    bucketHeads[0] = firstVariable;
 }
 
 void reloadGipsatBuckets(const pqData mActivityHeap[2][_FPGA_MAX_LITERALS],
@@ -460,6 +481,10 @@ void reloadGipsatBuckets(const pqData mActivityHeap[2][_FPGA_MAX_LITERALS],
     RELOAD_BUCKET_DOMAIN: for(unsigned int i = 0; i < NUM_DOMAIN_LITERALS; i++){
         #pragma HLS loop_tripcount min=1 max=1024
         const unsigned int variable = decisionDomain[i];
+        if(variable == 0 || variable > NUM_LITERALS ||
+                bucketState[variable-1][0] != 0){
+            continue;
+        }
         bucketState[variable-1][0] = 1;
         gipsatBucketPush(variable, mActivityHeap, mPositioning, bucketState,
             bucketNext, bucketHeads, activityHeapSize, bucketHead);
@@ -481,6 +506,10 @@ lit gipsatBucketPop(ap_uint<3> bucketState[_FPGA_MAX_LITERALS],
         }
 
         const unsigned int variable = bucketHeads[bucketHead];
+        if(variable == 0 || variable > _FPGA_MAX_LITERALS){
+            bucketHeads[bucketHead] = 0;
+            continue;
+        }
         bucketHeads[bucketHead] = bucketNext[variable-1];
         bucketState[variable-1][1] = 0;
         if(bucketState[variable-1][2] == 0){
@@ -500,6 +529,10 @@ void gipsatBumpActivity(hls::stream<lit>& input,
             if(variable == pq::EXIT){
                 break;
             }
+            if(variable == 0 || variable > (lit)_FPGA_MAX_LITERALS ||
+                    variable < -(lit)_FPGA_MAX_LITERALS){
+                continue;
+            }
             variable = abs(variable);
             const unsigned int index = variable-1;
             const unsigned int position = mPositioning[index].pos;
@@ -509,6 +542,9 @@ void gipsatBumpActivity(hls::stream<lit>& input,
             bumped.score += multiplier;
             unsigned int insertPosition = position;
             if(!present){
+                if(activityHeapSize >= _FPGA_MAX_LITERALS){
+                    continue;
+                }
                 insertPosition = activityHeapSize;
                 activityHeapSize++;
             }
@@ -555,6 +591,10 @@ void gipsatBucketUnhide(hls::stream<lit>& input,
             if(variable == pq::EXIT){
                 break;
             }
+            if(variable == 0 || variable > (lit)_FPGA_MAX_LITERALS ||
+                    variable < -(lit)_FPGA_MAX_LITERALS){
+                continue;
+            }
             variable = abs(variable);
             bucketState[variable-1][2] = 0;
             gipsatBucketPush(variable, mActivityHeap, mPositioning, bucketState,
@@ -587,6 +627,10 @@ void gipsatBucketHide(hls::stream<lit>& input,
         if(input.read_nb(variable)){
             if(variable == pq::EXIT){
                 break;
+            }
+            if(variable == 0 || variable > (lit)_FPGA_MAX_LITERALS ||
+                    variable < -(lit)_FPGA_MAX_LITERALS){
+                continue;
             }
             variable = abs(variable);
             if(bucketState[variable-1][0] != 0){
@@ -652,6 +696,10 @@ void gipsatSwitchToHeap(const unsigned int* decisionDomain,
     BUILD_ACTIVE_HEAP: for(unsigned int i = 0; i < NUM_DOMAIN_LITERALS; i++){
         #pragma HLS loop_tripcount min=1 max=1024
         const unsigned int variable = decisionDomain[i];
+        if(variable == 0 || variable > NUM_LITERALS ||
+                newPosition[variable-1] != GIPSAT_LINK_NONE){
+            continue;
+        }
         if(bucketState[variable-1][1] != 0 && bucketState[variable-1][2] == 0){
             const pqData value = gipsatActivity(mPriorityQueue, mPositioning, activityHeapSize, variable);
             gipsatHeapPushSingle(mPriorityQueue[1], newPosition, value, active++);
@@ -662,6 +710,10 @@ void gipsatSwitchToHeap(const unsigned int* decisionDomain,
     APPEND_HIDDEN_DOMAIN: for(unsigned int i = 0; i < NUM_DOMAIN_LITERALS; i++){
         #pragma HLS loop_tripcount min=1 max=1024
         const unsigned int variable = decisionDomain[i];
+        if(variable == 0 || variable > NUM_LITERALS ||
+                newPosition[variable-1] != GIPSAT_LINK_NONE){
+            continue;
+        }
         if(bucketState[variable-1][1] == 0 || bucketState[variable-1][2] != 0){
             const pqData value = gipsatActivity(mPriorityQueue, mPositioning, activityHeapSize, variable);
             mPriorityQueue[1][active] = value;

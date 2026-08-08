@@ -27,6 +27,10 @@
 #define _FPGA_MAX_LEARN_ELE 1024
 #define _FPGA_MAX_LEARN_ELE_BITS 10
 
+static_assert((_FPGA_CLS_STATES_PARTITION &
+        (_FPGA_CLS_STATES_PARTITION-1)) == 0,
+    "clause-state partition count must be a power of two");
+
 //REQUIRES FPGA BITSTREAM RECOMPILE
 //MUST BE MULTIPLE OF 16
 #if defined(FPGA_VCK5000)

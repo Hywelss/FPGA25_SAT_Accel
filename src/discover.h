@@ -9,6 +9,10 @@
 
 inline bool domainAllowsPropagation(const lit literal, const unsigned int decisionLevel,
     const bool mInDomain[_FPGA_MAX_LITERALS]){
+    if(literal == 0 || literal > _FPGA_MAX_LITERALS ||
+            literal < -_FPGA_MAX_LITERALS){
+        return false;
+    }
     return decisionLevel == 0 || mInDomain[abs(literal)-1];
 }
 
@@ -24,7 +28,7 @@ void updateStatesForward(hls::stream<clsStateControlPacket>& toControlSinkMUX,
     hls::stream<colorValue>& toStateUpdater, clsState clsStates1[_FPGA_MAX_CLAUSES/_FPGA_CLS_STATES_PARTITION], clsState clsStates2[_FPGA_MAX_CLAUSES/_FPGA_CLS_STATES_PARTITION], 
     const unsigned int id);
 void muxControlSink(hls::stream<clsStateControlPacket>& toControlSink, 
-    hls::stream<clsStateControlPacket> toControlSinkMUX[_FPGA_CLS_STATES_PARTITION]);
+    hls::stream<clsStateControlPacket> toControlSinkMUX[_FPGA_CLS_STATES_PARTITION/2]);
 void controlSink(hls::stream<bcpPacket>& toOverflow,
     hls::stream<clsStateControlPacket>& toControlSink,
     hls::stream<int>& duplicateCountStream,

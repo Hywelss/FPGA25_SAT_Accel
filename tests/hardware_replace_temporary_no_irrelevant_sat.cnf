@@ -1,0 +1,14 @@
+c Equivalent to incremental_queries/02_replace_temporary_sat.cnf, but excludes
+c unconstrained variable 4 from the decision domain and uses a permanent clause.
+c ind-domain 1 2 3 5 6 7 8 0
+c ind-activation 8
+c ind-query-v1 3 0 5
+p cnf 8 8
+1 2 0
+-1 3 0
+2 5 6 7 0
+8 0
+-3 0
+-5 0
+-6 0
+-7 0

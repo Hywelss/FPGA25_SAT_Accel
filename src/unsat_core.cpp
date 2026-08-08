@@ -9,6 +9,10 @@ static bool markReasonClause(
     hls::stream<ap_axiu<32,0,0,0>>& clauseStoreOutputStream){
     #pragma HLS inline off
 
+    if(clauseID <= 0 || (unsigned int)clauseID > _FPGA_MAX_CLAUSES){
+        return false;
+    }
+
     ap_axiu<96,0,0,0> request;
     request.data = 0;
     request.data.range(31,0) = clauseID-1;
@@ -23,11 +27,13 @@ static bool markReasonClause(
         if(reasonLiteral == 0){
             break;
         }
-        const unsigned int variable = abs(reasonLiteral);
-        if(variable == 0 || variable > numLiterals){
+        if(!isValidLiteral(reasonLiteral) ||
+                reasonLiteral > (lit)numLiterals ||
+                reasonLiteral < -(lit)numLiterals){
             valid = false;
             continue;
         }
+        const unsigned int variable = abs(reasonLiteral);
         if(variable == skipVariable){
             continue;
         }
@@ -90,12 +96,15 @@ bool extractUnsatCore(
             finishClauseReads(clauseStoreInputStream1, clauseStoreInputStream2);
             return false;
         }
-        const unsigned int conflictVariable =
-            abs(assumptions[conflictingAssumptionIndex]);
-        if(conflictVariable == 0 || conflictVariable > numLiterals){
+        const lit conflictingAssumption =
+            assumptions[conflictingAssumptionIndex];
+        if(!isValidLiteral(conflictingAssumption) ||
+                conflictingAssumption > (lit)numLiterals ||
+                conflictingAssumption < -(lit)numLiterals){
             finishClauseReads(clauseStoreInputStream1, clauseStoreInputStream2);
             return false;
         }
+        const unsigned int conflictVariable = abs(conflictingAssumption);
         if(coreCount >= numAssumptions){
             finishClauseReads(clauseStoreInputStream1, clauseStoreInputStream2);
             return false;
@@ -119,11 +128,12 @@ bool extractUnsatCore(
         #pragma HLS loop_tripcount min=1 max=1024
 
         const lit assigned = answerStack[answerStackHeight-1-offset];
-        const unsigned int variable = abs(assigned);
-        if(variable == 0 || variable > numLiterals){
+        if(!isValidLiteral(assigned) || assigned > (lit)numLiterals ||
+                assigned < -(lit)numLiterals){
             finishClauseReads(clauseStoreInputStream1, clauseStoreInputStream2);
             return false;
         }
+        const unsigned int variable = abs(assigned);
         if(seen[variable-1] == 0){
             continue;
         }

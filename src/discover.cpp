@@ -1,5 +1,13 @@
 #include "discover.h"
 
+void touchDiscoverDataflowStore(volatile uint64_t store[2]){
+    #pragma HLS inline off
+    store[0]++;
+    store[1]++;
+}
+#include "clause_state_cache.h"
+#include "packed_clause_selector.h"
+
 bool seenSecond = false;
 void discover(hls::stream<colorAssignment>& toCommitStream, hls::stream<bcpPacket>& toDecide,
     hls::stream<int>& duplicateCountStream, hls::stream<ap_axiu<32,0,0,0>>& clauseStoreOutputStream,
@@ -21,7 +29,8 @@ void discover(hls::stream<colorAssignment>& toCommitStream, hls::stream<bcpPacke
             answerStack, lmd, lmmd, unitByCls,
             answerStackHeight, duplicateCount, topLiteral,
             fixedDecisionStackHeight, decisionLevel, forceLiteralPhase, POSITIVE_LIT_PHASE_VAL);
-    }else{
+    }else if(isValidLiteral(litToCheck.literal) &&
+            answerStackHeight < _FPGA_MAX_LITERALS){
         lmd[abs(litToCheck.literal)-1] = litToCheck.lmd;
         for(unsigned int j = 0; j < _FPGA_PARALLEL_MINIMIZE; j++){
             #pragma HLS unroll
@@ -43,6 +52,10 @@ void discover(hls::stream<colorAssignment>& toCommitStream, hls::stream<bcpPacke
         }
 
         answerStackHeight++;
+    }else{
+        // One propagation was scheduled for this record.  Report it as an
+        // empty completion so controlSink can retire the matching work item.
+        duplicateCount++;
     }
 
     #ifndef FPGA_HW
@@ -66,8 +79,8 @@ void discover(hls::stream<colorAssignment>& toCommitStream, hls::stream<bcpPacke
     get.unitByClause = 0;
     get.unitByLit = 0;
     const int DEPENDENCY = _FPGA_DISC_LMD_DEP_DIST;
-    literalMinimizeMetaData getLmmd;
-    literalMetaData getLmd;
+    literalMinimizeMetaData getLmmd = {};
+    literalMetaData getLmd = {};
     #ifndef FPGA_HW
     BCP_DISCOVER: while(!toDecide.empty()){
     #else
@@ -82,14 +95,15 @@ void discover(hls::stream<colorAssignment>& toCommitStream, hls::stream<bcpPacke
         }
         const bool dataAvailable = toDecide.read_nb(get);
         
-        lit absLit = abs(get.literalUnitted)-1;
-        ap_uint<1> selectSide = 0;
-        if(get.literalUnitted > 0){
-            selectSide = 1;   
-        }
-
         if(dataAvailable && get.literalUnitted != 0){
             unsigned int clsLength = clauseStoreOutputStream.read().data;
+            if(!isValidLiteral(get.literalUnitted)){
+                duplicateCount++;
+                continue;
+            }
+
+            const unsigned int absLit = abs(get.literalUnitted)-1;
+            ap_uint<1> selectSide = get.literalUnitted > 0;
             bool found = false;
 
             for(unsigned int i = 0; i < _FPGA_DISC_LMD_DEP_DIST; i++){
@@ -103,10 +117,17 @@ void discover(hls::stream<colorAssignment>& toCommitStream, hls::stream<bcpPacke
                 getLmmd = lmmd[0][absLit];
                 getLmd = lmd[absLit];
             }
-            bool cmp = answerStack[(int)LMD_INSERT_LVL(getLmd.compactlmd)] == get.literalUnitted && 
+            const unsigned int insertLevel = LMD_INSERT_LVL(getLmd.compactlmd);
+            bool cmp = insertLevel < answerStackHeight &&
+                    insertLevel < _FPGA_MAX_LITERALS &&
+                    answerStack[insertLevel] == get.literalUnitted &&
                     (int)LMD_UNIT_BY_LIT(getLmd.compactlmd) == get.unitByLit && clsLength < LMD_SHORTEST_CLS_LENGTH(getLmd.compactlmd);
 
             if(!LMD_IS_IN_STACK(getLmd.compactlmd)){
+                if(answerStackHeight >= _FPGA_MAX_LITERALS){
+                    duplicateCount++;
+                    continue;
+                }
                 LMD_INSERT_LVL(getLmd.compactlmd) = answerStackHeight;
                 LMD_DEC_LVL(getLmd.compactlmd) = decisionLevel;
                 LMD_IS_IN_STACK(getLmd.compactlmd) = true;
@@ -118,7 +139,9 @@ void discover(hls::stream<colorAssignment>& toCommitStream, hls::stream<bcpPacke
 
                 if(decisionLevel == 0){
                     LMMD_IS_IN_FIX_STACK(getLmmd.compactlmmd) = true;
-                    fixedDecisionStackHeight++;
+                    if(fixedDecisionStackHeight < _FPGA_MAX_LITERALS){
+                        fixedDecisionStackHeight++;
+                    }
                 }
 
                 unsigned int numElements = (unsigned int)LMD_NUM_ELE(getLmd.compactlmd,selectSide);
@@ -149,16 +172,22 @@ void discover(hls::stream<colorAssignment>& toCommitStream, hls::stream<bcpPacke
                 duplicateCount = 0;
             }
         }
-        for(unsigned int i = 0; i < _FPGA_DISC_LMD_DEP_DIST-1; i++){
-            cacheLit[i] = cacheLit[i+1];
-            cacheLmd[i] = cacheLmd[i+1];
-            cacheLmmd[i] = cacheLmmd[i+1];
+        if(dataAvailable && isValidLiteral(get.literalUnitted)){
+            const unsigned int absLit = abs(get.literalUnitted)-1;
+            for(unsigned int i = 0; i < _FPGA_DISC_LMD_DEP_DIST-1; i++){
+                cacheLit[i] = cacheLit[i+1];
+                cacheLmd[i] = cacheLmd[i+1];
+                cacheLmmd[i] = cacheLmmd[i+1];
+            }
+            cacheLit[_FPGA_DISC_LMD_DEP_DIST-1] = absLit;
+            cacheLmd[_FPGA_DISC_LMD_DEP_DIST-1] = getLmd;
+            cacheLmmd[_FPGA_DISC_LMD_DEP_DIST-1] = getLmmd;
         }
-        cacheLit[_FPGA_DISC_LMD_DEP_DIST-1] = absLit;
-        cacheLmd[_FPGA_DISC_LMD_DEP_DIST-1] = getLmd;
-        cacheLmmd[_FPGA_DISC_LMD_DEP_DIST-1] = getLmmd;
     }
     
+    if(duplicateCount != 0){
+        duplicateCountStream.write(duplicateCount);
+    }
     toCommitStream.write((colorAssignment){.addressStart=0,.depthCount=0,.literal=0,.eos=true});
     duplicateCountStream.write(-1);
 }
@@ -191,6 +220,7 @@ void updateStatesForward(hls::stream<clsStateControlPacket>& toControlSink,
 
     INVALID_ADDR: for(unsigned int i = 0; i < _FPGA_CLS_DEP_DIST; i++){
         cacheClsAddr[i] = _FPGA_MAX_CLAUSES;
+        cacheClsState[i] = {};
     }
 
     UPDATE_FORWARD: while(true){
@@ -201,9 +231,19 @@ void updateStatesForward(hls::stream<clsStateControlPacket>& toControlSink,
 
         if(didGet){
             if(get.streamEos){
+                if(clsEosCount != 0){
+                    ctrlPkt.pktType = solverCode::EOS_CNT;
+                    ctrlPkt.eosCount = clsEosCount;
+                    ctrlPkt.bcp.unitByClause = 0;
+                    ctrlPkt.bcp.literalUnitted = 0;
+                    ctrlPkt.bcp.unitByLit = 0;
+                    ctrlPkt.bcp.depthCount = 0;
+                    toControlSink.write(ctrlPkt);
+                    clsEosCount = 0;
+                }
                 break;
             }else{
-                if(clsID != 0){
+                if(clsID > 0 && (unsigned int)clsID <= _FPGA_MAX_CLAUSES){
                     unsigned int bigAddr = (clsID-1)%2;
                     unsigned int subAddr = (clsID-1)/_FPGA_CLS_STATES_PARTITION;
                     
@@ -214,25 +254,23 @@ void updateStatesForward(hls::stream<clsStateControlPacket>& toControlSink,
                         getState = clsStates2[subAddr];
                     }
 
-                    for(unsigned int i = 0; i < _FPGA_CLS_DEP_DIST; i++){
-                        if(clsID-1 == cacheClsAddr[i]){
-                            getState = cacheClsState[i];
-                        }
+                    getState = selectNewestClauseState(clsID-1, getState,
+                        cacheClsAddr, cacheClsState);
+
+                    const bool validCount = getState.remainingUnassigned > 0;
+                    const bool createsConflict =
+                        getState.remainingUnassigned == 1;
+                    const bool createsUnit =
+                        getState.remainingUnassigned == 2;
+                    const int nextCompressed =
+                        getState.compressedList ^ (-get.litID);
+
+                    if(validCount){
+                        getState.remainingUnassigned--;
+                        getState.compressedList = nextCompressed;
                     }
 
-                    getState.remainingUnassigned--;
-                    getState.compressedList ^= (-get.litID);
-
-                    if(getState.remainingUnassigned == 1 && !doBacktrack){
-                        ctrlPkt.pktType = solverCode::UNIT;
-                        ctrlPkt.eosCount = 0;
-                        ctrlPkt.bcp.unitByClause = clsID;
-                        ctrlPkt.bcp.literalUnitted = getState.compressedList;
-                        ctrlPkt.bcp.unitByLit = get.litID;
-                        ctrlPkt.bcp.depthCount = get.depthCount;
-
-                        toControlSink.write(ctrlPkt);
-                    }else if(getState.remainingUnassigned == 0){
+                    if(createsConflict){
                         ctrlPkt.pktType = solverCode::BACKTRACK;
                         ctrlPkt.eosCount = 0;
                         ctrlPkt.bcp.unitByClause = clsID;
@@ -243,6 +281,15 @@ void updateStatesForward(hls::stream<clsStateControlPacket>& toControlSink,
                         toControlSink.write(ctrlPkt);
 
                         doBacktrack = true;
+                    }else if(createsUnit && !doBacktrack){
+                        ctrlPkt.pktType = solverCode::UNIT;
+                        ctrlPkt.eosCount = 0;
+                        ctrlPkt.bcp.unitByClause = clsID;
+                        ctrlPkt.bcp.literalUnitted = nextCompressed;
+                        ctrlPkt.bcp.unitByLit = get.litID;
+                        ctrlPkt.bcp.depthCount = get.depthCount;
+
+                        toControlSink.write(ctrlPkt);
                     }
 
                     if(bigAddr == 0){
@@ -284,14 +331,13 @@ void updateStatesForward(hls::stream<clsStateControlPacket>& toControlSink,
         if(didGet){
             clsID = 0;
             currentIndex = READ_SIZE_CHUNK-1;
-            for(int i = READ_SIZE_CHUNK-1; i >= 0; i--){
-                cls tmpID = get.clsID.range(32*i+31,32*i);
-                if(((tmpID-1)%_FPGA_CLS_STATES_PARTITION == id || (tmpID-1)%_FPGA_CLS_STATES_PARTITION == id+1) && tmpID != 0){
-                    clsID = tmpID;
-                    currentIndex = i;
-                }
+            ap_uint<3> selectedIndex = 0;
+            const bool foundClause = selectPackedClause<true>(
+                get.clsID, id, clsID, selectedIndex);
+            if(foundClause){
+                currentIndex = selectedIndex;
+                get.clsID.range(32*currentIndex+31,32*currentIndex) = 0;
             }
-            get.clsID.range(32*currentIndex+31,32*currentIndex) = 0;
         }
     }
 
@@ -357,6 +403,7 @@ void controlSink(hls::stream<bcpPacket>& toDecide,
 
     volatile int sendToStack = _FPGA_CLS_STATES_PARTITION/2;
     bool writeOnce = false;
+    bool decideEndSent = false;
     clsStateControlPacket ctrlPkt;
     ap_uint<_FPGA_CLS_STATES_SELECT_BITS-2+1> exit = 0;
     bool finishCount = false;
@@ -365,7 +412,17 @@ void controlSink(hls::stream<bcpPacket>& toDecide,
     if(!firstIteration){
         sendToStack = fixedDecisionStackHeight*(_FPGA_CLS_STATES_PARTITION/2);
         if(sendToStack == 0){
-            sendToStack = _FPGA_CLS_STATES_PARTITION/2;
+            if(decisionLevel == 0){
+                // Level zero is entered only to propagate newly fixed literals.
+                // An empty batch is an internal protocol error; turn it into the
+                // normal learning-error path instead of waiting for four acks
+                // that can never be produced.
+                stopSending.write(true);
+                doBackTrack = true;
+                writeOnce = true;
+            }else{
+                sendToStack = _FPGA_CLS_STATES_PARTITION/2;
+            }
         }
     }
 
@@ -384,6 +441,13 @@ void controlSink(hls::stream<bcpPacket>& toDecide,
                 exit++;
             }else if(ctrlPkt.eosCount != 0){
                 sendToStack -= ctrlPkt.eosCount;
+#ifdef FPGA_HW
+                if(sendToStack < 0 && !doBackTrack){
+                    stopSending.write(true);
+                    doBackTrack = true;
+                    writeOnce = true;
+                }
+#endif
             }else{
                 if(ctrlPkt.pktType == solverCode::BACKTRACK){
                     if(ctrlPkt.bcp.depthCount < currentDepth){
@@ -405,7 +469,17 @@ void controlSink(hls::stream<bcpPacket>& toDecide,
                         writeOnce = true;
                     }
                 }else if(ctrlPkt.pktType == solverCode::UNIT &&
-                         domainAllowsPropagation(ctrlPkt.bcp.literalUnitted, decisionLevel, mInDomain)){
+                        (!isValidLiteral(ctrlPkt.bcp.literalUnitted) ||
+                         ctrlPkt.bcp.unitByClause == 0 ||
+                         ctrlPkt.bcp.unitByClause > _FPGA_MAX_CLAUSES)){
+                    if(!doBackTrack){
+                        stopSending.write(true);
+                        doBackTrack = true;
+                        writeOnce = true;
+                    }
+                }else if(ctrlPkt.pktType == solverCode::UNIT &&
+                         domainAllowsPropagation(ctrlPkt.bcp.literalUnitted,
+                            decisionLevel, mInDomain)){
                     ap_axiu<96,0,0,0> sendClauseInputCommand;
                     sendClauseInputCommand.data.range(95,64) = 0;
                     sendClauseInputCommand.data.range(63,32) = 0;
@@ -423,6 +497,11 @@ void controlSink(hls::stream<bcpPacket>& toDecide,
         else if(duplicateCountStream.read_nb(readCount)){
             if(readCount != -1){
                 sendToStack -= (readCount*_FPGA_CLS_STATES_PARTITION/2);
+                if(sendToStack < 0 && !doBackTrack){
+                    stopSending.write(true);
+                    doBackTrack = true;
+                    writeOnce = true;
+                }
             }else{
                 finishCount = true;
             }
@@ -431,6 +510,7 @@ void controlSink(hls::stream<bcpPacket>& toDecide,
             stopSending.write(false);
             
             toDecide.write((bcpPacket){.literalUnitted=0,.unitByClause=0,.unitByLit=0,.depthCount=0});
+            decideEndSent = true;
         }
         #endif
     }
@@ -444,7 +524,13 @@ void controlSink(hls::stream<bcpPacket>& toDecide,
     }
     toDecide.write((bcpPacket){.literalUnitted=0,.unitByClause=0,.unitByLit=0,.depthCount=0});
     #else
-    if(doBackTrack){
+    // If the updater exits arrive back-to-back, the loop has no empty cycle in
+    // which to close these streams.  Close them before waiting for discover's
+    // count terminator, otherwise controlSink and discover wait on each other.
+    if(!writeOnce){
+        stopSending.write(false);
+    }
+    if(!decideEndSent){
         toDecide.write((bcpPacket){.literalUnitted=0,.unitByClause=0,.unitByLit=0,.depthCount=0});
     }
     #endif
@@ -473,9 +559,6 @@ void bcp_discover_dataflow_wrapper(clsState clsStates[_FPGA_CLS_STATES_PARTITION
 
     #pragma HLS inline off
     
-    store[0]++;
-    store[1]++;
-
     hls::stream<colorAssignment> toColorStream("colorStream");
     #pragma HLS stream variable=toColorStream depth=MAX_STREAM_DEPTH
     
@@ -514,6 +597,8 @@ void bcp_discover_dataflow_wrapper(clsState clsStates[_FPGA_CLS_STATES_PARTITION
     bool firstIterationCopy = firstIteration;
 
     #pragma HLS dataflow
+
+    touchDiscoverDataflowStore(store);
 
     #ifndef FPGA_HW
     stopSending.write(false);

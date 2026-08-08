@@ -7,6 +7,11 @@
 typedef int lit;
 typedef int cls;
 
+inline bool isValidLiteral(const lit literal){
+    return literal != 0 && literal <= _FPGA_MAX_LITERALS &&
+        literal >= -_FPGA_MAX_LITERALS;
+}
+
 namespace lh{
     enum lh_codes{EXIT=-1,SEND=1,SAVE=2,UPDATE=3};
 }

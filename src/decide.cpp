@@ -11,13 +11,21 @@ void checkUndecided(hls::stream<colorAssignment>& toCommitStream,
 
     if(decisionLevel == 0){
         const unsigned int firstFixedDecision = answerStackHeight;
-        WRITE_FIXED_DECISION: for(unsigned int i = firstFixedDecision; i < fixedDecisionStackHeight; i++){
+        const unsigned int safeFixedDecisionStackHeight =
+            fixedDecisionStackHeight <= _FPGA_MAX_LITERALS
+                ? fixedDecisionStackHeight : _FPGA_MAX_LITERALS;
+        WRITE_FIXED_DECISION: for(unsigned int i = firstFixedDecision;
+                i < safeFixedDecisionStackHeight; i++){
             #pragma HLS loop_tripcount min=256 max=256
             #pragma HLS pipeline
             #pragma HLS dependence variable=lmd inter false
             #pragma HLS dependence variable=lmmd inter false
 
             lit getUndecided = answerStack[i];
+            if(!isValidLiteral(getUndecided)){
+                duplicateCount++;
+                continue;
+            }
             literalMetaData getLmd = lmd[abs(getUndecided)-1];
             literalMinimizeMetaData getLmmd = lmmd[0][abs(getUndecided)-1];
 
@@ -52,9 +60,14 @@ void checkUndecided(hls::stream<colorAssignment>& toCommitStream,
                 duplicateCount++;
             }
         }
-        answerStackHeight = fixedDecisionStackHeight;
+        answerStackHeight = safeFixedDecisionStackHeight;
     }else{
         lit getUndecided = topLiteral;
+        if(!isValidLiteral(getUndecided) ||
+                answerStackHeight >= _FPGA_MAX_LITERALS){
+            duplicateCount++;
+            return;
+        }
         lit absLit = abs(getUndecided)-1;
         literalMetaData getLmd = lmd[absLit];
         literalMinimizeMetaData getLmmd = lmmd[0][absLit];

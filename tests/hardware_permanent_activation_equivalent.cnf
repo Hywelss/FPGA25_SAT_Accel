@@ -1,0 +1,7 @@
+c Same logic as 12_activation_learning_unsat.cnf, but all clauses are permanent.
+p cnf 3 5
+1 2 -3 0
+1 -2 -3 0
+-1 2 -3 0
+-1 -2 -3 0
+3 0

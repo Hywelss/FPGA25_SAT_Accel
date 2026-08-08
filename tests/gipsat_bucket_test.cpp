@@ -245,11 +245,36 @@ void test_maximum_variable_link_width() {
     assert(gipsatBucketPop(bucket_state, bucket_next, bucket_heads,
                            bucket_head) == 1);
 }
+
+void test_invalid_and_duplicate_domain_entries() {
+    unsigned int domain[] = {0, 2, 2, 99, 4};
+    gipsatBucket bucket_head = 0;
+    gipsatLink activity_heap_size = 0;
+
+    loadGipsatBuckets(positions, bucket_state, bucket_next, bucket_heads,
+                      domain, 4, 5, bucket_head, activity_heap_size);
+    assert(gipsatBucketPop(bucket_state, bucket_next, bucket_heads,
+                           bucket_head) == 4);
+    assert(gipsatBucketPop(bucket_state, bucket_next, bucket_heads,
+                           bucket_head) == 2);
+    assert(gipsatBucketPop(bucket_state, bucket_next, bucket_heads,
+                           bucket_head) == pq::DOMAIN_EXHAUSTED);
+
+    double multiplier = 1.0;
+    hls::stream<lit> bump_input;
+    bump_input.write(0);
+    bump_input.write(_FPGA_MAX_LITERALS + 1);
+    bump_input.write(pq::EXIT);
+    gipsatBumpActivity(bump_input, queue_data, positions,
+                       activity_heap_size, multiplier, 0.95);
+    assert(activity_heap_size == 0);
+}
 }  // namespace
 
 int main() {
     test_assignment_visibility();
     test_maximum_variable_link_width();
+    test_invalid_and_duplicate_domain_entries();
 
     std::vector<unsigned int> domain;
     unsigned int domain_array[kNumVariables / 2];

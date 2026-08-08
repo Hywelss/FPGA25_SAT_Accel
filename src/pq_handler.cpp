@@ -38,9 +38,14 @@ void pqHandler(const unsigned int* decision_domain, int num_literals, int num_do
     static gipsatLink bucketHeads[GIPSAT_NUM_BUCKETS];
     #pragma HLS array_partition variable=bucketHeads complete
 
-    unsigned int remainingLiterals = num_domain_literals;
+    const bool validConfiguration = num_literals >= 0 &&
+        num_literals <= (int)_FPGA_MAX_LITERALS &&
+        num_domain_literals >= 0 && num_domain_literals <= num_literals;
+    unsigned int remainingLiterals = validConfiguration
+        ? (unsigned int)num_domain_literals : 0;
 
-    unsigned int NUM_LITERALS = num_literals;
+    unsigned int NUM_LITERALS = validConfiguration
+        ? (unsigned int)num_literals : 0;
 
     static double multiplier = 1.0;
     double decayFactor = decay;
@@ -49,6 +54,14 @@ void pqHandler(const unsigned int* decision_domain, int num_literals, int num_do
     static gipsatLink activityHeapSize = 0;
     static unsigned int previousNumLiterals = 0;
     bool useBucket = true;
+    if(!validConfiguration){
+        ap_axiu<32,0,0,0> command = input.read();
+        while((int)command.data != pq::EXIT){
+            #pragma HLS loop_tripcount min=1 max=1024
+            command = input.read();
+        }
+        return;
+    }
     if(session_reset){
         multiplier = 1.0;
         loadGipsatBuckets(mPositioning, bucketState, bucketNext, bucketHeads,

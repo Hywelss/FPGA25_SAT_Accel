@@ -304,6 +304,16 @@ void parseDIMACS(std::string filePath, problemData& pd, const rapidjson::Documen
     pd.md.numStoredClauses = numPermanentClauses + numTemporaryClauses;
 
     if(hasQueryLayout){
+        std::size_t invalidTemporaryClause = 0;
+        if(!validateTemporaryClauseLengths(clsStore, numPermanentClauses,
+                numTemporaryClauses, _FPGA_MAX_LEARN_ELE,
+                invalidTemporaryClause)){
+            std::cerr << "Temporary clause " << invalidTemporaryClause + 1
+                      << " exceeds the FPGA deletion limit of "
+                      << _FPGA_MAX_LEARN_ELE << " literals in " << filePath
+                      << "\n";
+            exit(EXIT_FAILURE);
+        }
         if(constraintActivation == 0 || constraintActivation > pd.md.numLiterals){
             std::cerr << "ind-activation is missing or outside the variable range in " << filePath << "\n";
             exit(EXIT_FAILURE);
@@ -836,8 +846,10 @@ bool solve(std::string inputFilePath, std::string outputResultFile, problemData&
 		memset(hostMemDebug, 0, sizeof(int) * 8192);
 	}else{
 		OCL_CHECK(err, hostMemDebugBuffer = cl::Buffer(context, CL_MEM_USE_HOST_PTR | CL_MEM_READ_WRITE, sizeof(int) * 8192, hostMemDebug, &err));
+		std::cout << "FPGA STAGE: transferring debug buffer\n" << std::flush;
 		OCL_CHECK(err, err = q.enqueueMigrateMemObjects({hostMemDebugBuffer}, 0));
 		OCL_CHECK(err, err = q.finish());
+		std::cout << "FPGA STAGE: debug buffer ready\n" << std::flush;
 	}
 
     OCL_CHECK(err, err = messageKernel.setArg(0, hostMemDebugBuffer));
@@ -874,9 +886,15 @@ bool solve(std::string inputFilePath, std::string outputResultFile, problemData&
     miscCounters[12] = queryPlan.reset ? 1 : 0;
     miscCounters[13] = queryPlan.previousPermanentCount;
     miscCounters[14] = queryPlan.newPermanentCount;
-    const bool priorityQueueReset = queryPlan.reset || session.resetPriorityQueue;
+    const bool forcePriorityQueueReset =
+        std::getenv("SAT_ACCEL_FORCE_PQ_RESET") != nullptr;
+    const bool priorityQueueReset = queryPlan.reset ||
+        session.resetPriorityQueue || forcePriorityQueueReset;
     if(session.resetPriorityQueue && !queryPlan.reset){
         std::cout << "VARIABLE SELECTION: RESET after prior exact-heap switch\n";
+    }
+    if(forcePriorityQueueReset && !queryPlan.reset){
+        std::cout << "VARIABLE SELECTION: FORCED RESET for protocol diagnosis\n";
     }
 
     OCL_CHECK(err, clsStoreBuffer = cl::Buffer(context, CL_MEM_USE_HOST_PTR | CL_MEM_READ_WRITE, _HOST_MAX_CLAUSE_ELEMENTS * sizeof(cls), pd.clauseStore, &err));
@@ -945,6 +963,7 @@ bool solve(std::string inputFilePath, std::string outputResultFile, problemData&
     OCL_CHECK(err, err = satSolverKernel.setArg(argN++, lmdBuffer));
     OCL_CHECK(err, err = satSolverKernel.setArg(argN++, miscBuffer));
 
+    std::cout << "FPGA STAGE: transferring query buffers\n" << std::flush;
     OCL_CHECK(err, err = q.enqueueMigrateMemObjects({clsStoreBuffer, 
         trackLBDCountBuffer,
         cmdBuffer,
@@ -954,6 +973,7 @@ bool solve(std::string inputFilePath, std::string outputResultFile, problemData&
         queryClauseStoreBuffer, queryCmdBuffer,
         clsToLitStorePosBuffer, litToClsStorePosBuffer}, 0 /* 0 means from host*/));
     OCL_CHECK(err, err = q.finish());
+    std::cout << "FPGA STAGE: query buffers ready\n" << std::flush;
 
     cl::Event evt;
 
@@ -964,6 +984,7 @@ bool solve(std::string inputFilePath, std::string outputResultFile, problemData&
     OCL_CHECK(err, err = q.enqueueTask(restartCalculateKernel, nullptr, nullptr));
     OCL_CHECK(err, err = q.enqueueTask(pqHandlerKernel, nullptr, nullptr));
     OCL_CHECK(err, err = q.enqueueTask(satSolverKernel, nullptr, &evt));
+    std::cout << "FPGA STAGE: kernels launched\n" << std::flush;
 
     std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
     uint64_t totalTime = 0;

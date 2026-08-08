@@ -47,6 +47,20 @@ int main(){
     assert(!parseSignedDecimal("2147483648", signedValue));
     assert(!parseSignedDecimal("--1", signedValue));
 
+    std::size_t invalidTemporaryClause = 99;
+    std::vector<std::vector<int>> boundedTemporaryClauses = {
+        {1, 2},
+        std::vector<int>(1024, 1),
+    };
+    assert(validateTemporaryClauseLengths(boundedTemporaryClauses, 1, 1,
+        1024, invalidTemporaryClause));
+    boundedTemporaryClauses[1].push_back(1);
+    assert(!validateTemporaryClauseLengths(boundedTemporaryClauses, 1, 1,
+        1024, invalidTemporaryClause));
+    assert(invalidTemporaryClause == 1);
+    assert(!validateTemporaryClauseLengths(boundedTemporaryClauses, 2, 1,
+        1024, invalidTemporaryClause));
+
     const std::vector<std::vector<int>> clauses = {
         {1, 2},
         {-1, 3},

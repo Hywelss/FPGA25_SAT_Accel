@@ -3,6 +3,23 @@
 #include <ap_utils.h>
 #include "data_structures.h"
 
+static bool validClausePageSize(const unsigned int pageSize){
+    #pragma HLS inline
+    return pageSize >= 4 && pageSize <= _FPGA_MAX_LITERAL_ELEMENTS &&
+        pageSize%4 == 0;
+}
+
+static unsigned int safeClauseLength(
+    const cls clauseID,
+    const clauseMetaData mCmd[_FPGA_MAX_CLAUSES]){
+    #pragma HLS inline
+    if(clauseID < 0 || (unsigned int)clauseID >= _FPGA_MAX_CLAUSES){
+        return 0;
+    }
+    const unsigned int length = mCmd[clauseID].numElements;
+    return length <= _FPGA_MAX_LITERAL_ELEMENTS ? length : 0;
+}
+
 void copyCls(ap_uint<128> mClsStore[_FPGA_MAX_LITERAL_ELEMENTS/4], ap_uint<128>* clauseStore, const unsigned int clauseElements){
     #pragma HLS inline off
 
@@ -74,9 +91,8 @@ void axiStreamBuffer_sendLength(hls::stream<ap_axiu<96,0,0,0>>& clauseStoreInput
         if(getCls == csh::EXIT){
             break;
         }
-        clauseMetaData cmd = mCmd[getCls];
         ap_axiu<32,0,0,0> sendData;
-        sendData.data = cmd.numElements;
+        sendData.data = safeClauseLength(getCls, mCmd);
         clauseStoreOutputStream.write(sendData);
         #endif
     }
@@ -94,9 +110,8 @@ void sendLength(hls::stream<ap_axiu<32,0,0,0>>& clauseStoreOutputStream, hls::st
                 break;
             }
 
-            clauseMetaData cmd = mCmd[clsID];
             ap_axiu<32,0,0,0> sendData;
-            sendData.data = cmd.numElements;
+            sendData.data = safeClauseLength(clsID, mCmd);
             clauseStoreOutputStream.write(sendData);
             
         }
@@ -122,6 +137,58 @@ void sendLength_wrapper(hls::stream<ap_axiu<32,0,0,0>>& clauseStoreOutputStream,
 
 }
 
+void rejectLengthRequests(
+    hls::stream<ap_axiu<96,0,0,0>>& clauseStoreInputStream,
+    hls::stream<ap_axiu<32,0,0,0>>& clauseStoreOutputStream){
+    #pragma HLS inline off
+    REJECT_LENGTH_REQUESTS: while(true){
+        #pragma HLS loop_tripcount min=1 max=1024
+        const ap_axiu<96,0,0,0> request = clauseStoreInputStream.read();
+        if((int)request.data.range(31,0) == csh::EXIT){
+            break;
+        }
+        ap_axiu<32,0,0,0> response;
+        response.data = 0;
+        clauseStoreOutputStream.write(response);
+    }
+}
+
+void rejectClauseRequests(
+    hls::stream<ap_axiu<96,0,0,0>>& clauseStoreInputStream1,
+    hls::stream<ap_axiu<96,0,0,0>>& clauseStoreInputStream2,
+    hls::stream<ap_axiu<32,0,0,0>>& clauseStoreOutputStream1,
+    hls::stream<ap_axiu<32,0,0,0>>& clauseStoreOutputStream2){
+    #pragma HLS inline off
+    bool done1 = false;
+    bool done2 = false;
+    REJECT_CLAUSE_REQUESTS: while(!done1 || !done2){
+        #pragma HLS loop_tripcount min=1 max=1024
+        #pragma HLS pipeline II=1
+        if(!done1 && !clauseStoreInputStream1.empty() &&
+                !clauseStoreOutputStream1.full()){
+            const ap_axiu<96,0,0,0> request = clauseStoreInputStream1.read();
+            if((int)request.data.range(95,64) == csh::EXIT){
+                done1 = true;
+            }else{
+                ap_axiu<32,0,0,0> response;
+                response.data = 0;
+                clauseStoreOutputStream1.write(response);
+            }
+        }
+        if(!done2 && !clauseStoreInputStream2.empty() &&
+                !clauseStoreOutputStream2.full()){
+            const ap_axiu<96,0,0,0> request = clauseStoreInputStream2.read();
+            if((int)request.data.range(95,64) == csh::EXIT){
+                done2 = true;
+            }else{
+                ap_axiu<32,0,0,0> response;
+                response.data = 0;
+                clauseStoreOutputStream2.write(response);
+            }
+        }
+    }
+}
+
 void sendDataScheduler(const ap_uint<128> mClsStore[_FPGA_MAX_LITERAL_ELEMENTS/4],
     const clauseMetaData mCmd[_FPGA_MAX_CLAUSES],
     const ap_uint<1> compactClauseLayout[_FPGA_MAX_CLAUSES],
@@ -129,16 +196,20 @@ void sendDataScheduler(const ap_uint<128> mClsStore[_FPGA_MAX_LITERAL_ELEMENTS/4
     hls::stream<ap_axiu<96,0,0,0>>& clauseStoreInputStream1,
     hls::stream<ap_axiu<96,0,0,0>>& clauseStoreInputStream2,
     hls::stream<ap_uint<33>>& outputBuffer1,
-    hls::stream<ap_uint<33>>& outputBuffer2,
-    hls::stream<bool>& outputCredit1,
-    hls::stream<bool>& outputCredit2){
+    hls::stream<ap_uint<33>>& outputBuffer2){
     #pragma HLS inline off
 
-    ap_uint<2> active = 0;
-    bool exit1 = false;
-    bool exit2 = false;
-    bool exitPending1 = false;
-    bool exitPending2 = false;
+    enum LaneState {
+        LANE_IDLE,
+        LANE_READ,
+        LANE_FOLLOW_PAGE,
+        LANE_SEND_END,
+        LANE_SEND_EXIT,
+        LANE_DONE
+    };
+
+    LaneState state1 = LANE_IDLE;
+    LaneState state2 = LANE_IDLE;
     unsigned int address1 = 0;
     unsigned int address2 = 0;
     unsigned int subIndex1 = 0;
@@ -151,167 +222,159 @@ void sendDataScheduler(const ap_uint<128> mClsStore[_FPGA_MAX_LITERAL_ELEMENTS/4
     unsigned int pageSize2 = CLAUSE_PAGE_SIZE;
     unsigned int nextPage1 = 0;
     unsigned int nextPage2 = 0;
-    bool followPage1 = false;
-    bool followPage2 = false;
-    #if defined(FPGA_HW) || defined(__SYNTHESIS__)
-    ap_uint<2> availableOutputSlots1 = 2;
-    ap_uint<2> availableOutputSlots2 = 2;
-    #endif
 
-    SEND_DATA_DUAL: while(!exit1 || !exit2){
+    SEND_DATA_DUAL: while(state1 != LANE_DONE || state2 != LANE_DONE){
         #pragma HLS loop_tripcount min=16 max=1024
-        #pragma HLS pipeline II=1
+        #pragma HLS pipeline II=2
 
-        ap_uint<2> nextActive = active;
-        ap_uint<2> outputKind1 = 0;
-        ap_uint<33> output1 = 0;
-        ap_uint<128> line1 = 0;
-        if(active[0]){
-            if(processed1 == clauseLength1){
-                outputKind1 = 2;
-            }else if(followPage1){
-                address1 = nextPage1;
-                followPage1 = false;
-            }else{
-                line1 = mClsStore[address1/4];
-                output1.range(31,0) = line1.range(32*(subIndex1%4)+31,32*(subIndex1%4));
-                outputKind1 = 1;
-            }
-        }else if(exitPending1){
-            output1[32] = 1;
-            outputKind1 = 3;
-        }else if(!exit1 && !clauseStoreInputStream1.empty()){
+        if(state1 == LANE_IDLE && !clauseStoreInputStream1.empty()){
             const ap_axiu<96,0,0,0> command = clauseStoreInputStream1.read();
             if((int)command.data.range(95,64) == csh::EXIT){
-                exitPending1 = true;
+                state1 = LANE_SEND_EXIT;
             }else{
                 const cls clauseID = command.data.range(31,0);
-                const clauseMetaData metadata = mCmd[clauseID];
-                address1 = metadata.addressStart;
-                clauseLength1 = metadata.numElements;
-                subIndex1 = 0;
-                processed1 = 0;
-                followPage1 = false;
-                pageSize1 = compactClauseLayout[clauseID] ? 4 : CLAUSE_PAGE_SIZE;
-                nextActive[0] = 1;
+                if(clauseID < 0 || (unsigned int)clauseID >= _FPGA_MAX_CLAUSES){
+                    state1 = LANE_SEND_END;
+                }else{
+                    const clauseMetaData metadata = mCmd[clauseID];
+                    address1 = metadata.addressStart;
+                    clauseLength1 = metadata.numElements;
+                    subIndex1 = 0;
+                    processed1 = 0;
+                    pageSize1 = compactClauseLayout[clauseID] ? 4 : CLAUSE_PAGE_SIZE;
+                    const bool validMetadata = metadata.numElements > 0 &&
+                        metadata.numElements <= _FPGA_MAX_LITERAL_ELEMENTS &&
+                        metadata.addressStart%4 == 0 &&
+                        validClausePageSize(pageSize1);
+                    state1 = validMetadata ? LANE_READ : LANE_SEND_END;
+                }
             }
-        }
-
-        bool canWriteOutput1 = true;
-        #if defined(FPGA_HW) || defined(__SYNTHESIS__)
-        if(!outputCredit1.empty()){
-            outputCredit1.read();
-            availableOutputSlots1++;
-        }
-        canWriteOutput1 = availableOutputSlots1 != 0;
-        #endif
-        if(outputKind1 != 0 && canWriteOutput1){
-            outputBuffer1.write(output1);
-            #if defined(FPGA_HW) || defined(__SYNTHESIS__)
-            availableOutputSlots1--;
-            #endif
-            if(outputKind1 == 1){
+        }else if(state1 == LANE_READ){
+            if(address1 >= _FPGA_MAX_LITERAL_ELEMENTS){
+                state1 = LANE_SEND_END;
+                continue;
+            }
+            const ap_uint<128> line = mClsStore[address1/4];
+            ap_uint<33> output = 0;
+            output.range(31,0) = line.range(32*(subIndex1%4)+31,
+                                               32*(subIndex1%4));
+            const lit literal = (ap_int<32>)output.range(31,0);
+            if(literal == 0 || literal > _FPGA_MAX_LITERALS ||
+                    literal < -_FPGA_MAX_LITERALS){
+                state1 = LANE_SEND_END;
+            }else if(!outputBuffer1.full()){
+                outputBuffer1.write(output);
                 processed1++;
                 subIndex1++;
-                if(processed1 < clauseLength1 && subIndex1 == pageSize1-1){
-                    nextPage1 = line1.range(127,96);
-                    followPage1 = true;
+                if(processed1 == clauseLength1){
+                    state1 = LANE_SEND_END;
+                }else if(subIndex1 == pageSize1-1){
+                    nextPage1 = line.range(127,96);
                     subIndex1 = 0;
+                    state1 = LANE_FOLLOW_PAGE;
                 }else{
                     address1++;
                 }
-            }else if(outputKind1 == 2){
-                nextActive[0] = 0;
-            }else{
-                exitPending1 = false;
-                exit1 = true;
+            }
+        }else if(state1 == LANE_FOLLOW_PAGE){
+            address1 = nextPage1;
+            state1 = LANE_READ;
+        }else if(state1 == LANE_SEND_END){
+            const ap_uint<33> endOfClause = 0;
+            if(!outputBuffer1.full()){
+                outputBuffer1.write(endOfClause);
+                state1 = LANE_IDLE;
+            }
+        }else if(state1 == LANE_SEND_EXIT){
+            ap_uint<33> exitToken = 0;
+            exitToken[32] = 1;
+            if(!outputBuffer1.full()){
+                outputBuffer1.write(exitToken);
+                state1 = LANE_DONE;
             }
         }
 
-        ap_uint<2> outputKind2 = 0;
-        ap_uint<33> output2 = 0;
-        ap_uint<128> line2 = 0;
-        if(active[1]){
-            if(processed2 == clauseLength2){
-                outputKind2 = 2;
-            }else if(followPage2){
-                address2 = nextPage2;
-                followPage2 = false;
-            }else{
-                line2 = mClsStore[address2/4];
-                output2.range(31,0) = line2.range(32*(subIndex2%4)+31,32*(subIndex2%4));
-                outputKind2 = 1;
-            }
-        }else if(exitPending2){
-            output2[32] = 1;
-            outputKind2 = 3;
-        }else if(!exit2 && !clauseStoreInputStream2.empty()){
+        if(state2 == LANE_IDLE && !clauseStoreInputStream2.empty()){
             const ap_axiu<96,0,0,0> command = clauseStoreInputStream2.read();
             if((int)command.data.range(95,64) == csh::EXIT){
-                exitPending2 = true;
+                state2 = LANE_SEND_EXIT;
             }else{
                 const cls clauseID = command.data.range(31,0);
-                const clauseMetaData metadata = mCmd[clauseID];
-                address2 = metadata.addressStart;
-                clauseLength2 = metadata.numElements;
-                subIndex2 = 0;
-                processed2 = 0;
-                followPage2 = false;
-                pageSize2 = compactClauseLayout[clauseID] ? 4 : CLAUSE_PAGE_SIZE;
-                nextActive[1] = 1;
+                if(clauseID < 0 || (unsigned int)clauseID >= _FPGA_MAX_CLAUSES){
+                    state2 = LANE_SEND_END;
+                }else{
+                    const clauseMetaData metadata = mCmd[clauseID];
+                    address2 = metadata.addressStart;
+                    clauseLength2 = metadata.numElements;
+                    subIndex2 = 0;
+                    processed2 = 0;
+                    pageSize2 = compactClauseLayout[clauseID] ? 4 : CLAUSE_PAGE_SIZE;
+                    const bool validMetadata = metadata.numElements > 0 &&
+                        metadata.numElements <= _FPGA_MAX_LITERAL_ELEMENTS &&
+                        metadata.addressStart%4 == 0 &&
+                        validClausePageSize(pageSize2);
+                    state2 = validMetadata ? LANE_READ : LANE_SEND_END;
+                }
             }
-        }
-
-        bool canWriteOutput2 = true;
-        #if defined(FPGA_HW) || defined(__SYNTHESIS__)
-        if(!outputCredit2.empty()){
-            outputCredit2.read();
-            availableOutputSlots2++;
-        }
-        canWriteOutput2 = availableOutputSlots2 != 0;
-        #endif
-        if(outputKind2 != 0 && canWriteOutput2){
-            outputBuffer2.write(output2);
-            #if defined(FPGA_HW) || defined(__SYNTHESIS__)
-            availableOutputSlots2--;
-            #endif
-            if(outputKind2 == 1){
+        }else if(state2 == LANE_READ){
+            if(address2 >= _FPGA_MAX_LITERAL_ELEMENTS){
+                state2 = LANE_SEND_END;
+                continue;
+            }
+            const ap_uint<128> line = mClsStore[address2/4];
+            ap_uint<33> output = 0;
+            output.range(31,0) = line.range(32*(subIndex2%4)+31,
+                                               32*(subIndex2%4));
+            const lit literal = (ap_int<32>)output.range(31,0);
+            if(literal == 0 || literal > _FPGA_MAX_LITERALS ||
+                    literal < -_FPGA_MAX_LITERALS){
+                state2 = LANE_SEND_END;
+            }else if(!outputBuffer2.full()){
+                outputBuffer2.write(output);
                 processed2++;
                 subIndex2++;
-                if(processed2 < clauseLength2 && subIndex2 == pageSize2-1){
-                    nextPage2 = line2.range(127,96);
-                    followPage2 = true;
+                if(processed2 == clauseLength2){
+                    state2 = LANE_SEND_END;
+                }else if(subIndex2 == pageSize2-1){
+                    nextPage2 = line.range(127,96);
                     subIndex2 = 0;
+                    state2 = LANE_FOLLOW_PAGE;
                 }else{
                     address2++;
                 }
-            }else if(outputKind2 == 2){
-                nextActive[1] = 0;
-            }else{
-                exitPending2 = false;
-                exit2 = true;
+            }
+        }else if(state2 == LANE_FOLLOW_PAGE){
+            address2 = nextPage2;
+            state2 = LANE_READ;
+        }else if(state2 == LANE_SEND_END){
+            const ap_uint<33> endOfClause = 0;
+            if(!outputBuffer2.full()){
+                outputBuffer2.write(endOfClause);
+                state2 = LANE_IDLE;
+            }
+        }else if(state2 == LANE_SEND_EXIT){
+            ap_uint<33> exitToken = 0;
+            exitToken[32] = 1;
+            if(!outputBuffer2.full()){
+                outputBuffer2.write(exitToken);
+                state2 = LANE_DONE;
             }
         }
-        active = nextActive;
     }
 }
 
 void sendDataOutput(hls::stream<ap_uint<33>>& outputBuffer,
-    hls::stream<bool>& outputCredit,
     hls::stream<ap_axiu<32,0,0,0>>& clauseStoreOutputStream){
     #pragma HLS inline off
 
     SEND_DATA_OUTPUT: while(true){
         #pragma HLS loop_tripcount min=16 max=1024
-        #pragma HLS pipeline II=1
+        #pragma HLS pipeline II=2
         const ap_uint<33> buffered = outputBuffer.read();
         if(buffered[32]){
             break;
         }
 
-        #if defined(FPGA_HW) || defined(__SYNTHESIS__)
-        outputCredit.write(true);
-        #endif
         ap_axiu<32,0,0,0> output;
         output.data = buffered.range(31,0);
         clauseStoreOutputStream.write(output);
@@ -327,16 +390,39 @@ void sendClauseSequentialModel(
     hls::stream<ap_axiu<32,0,0,0>>& clauseStoreOutputStream){
     #pragma HLS inline off
 
+    if(clauseID < 0 || (unsigned int)clauseID >= _FPGA_MAX_CLAUSES){
+        ap_axiu<32,0,0,0> endOfClause;
+        endOfClause.data = 0;
+        clauseStoreOutputStream.write(endOfClause);
+        return;
+    }
+
     const clauseMetaData metadata = mCmd[clauseID];
     const unsigned int pageSize = compactClauseLayout[clauseID] ? 4 : CLAUSE_PAGE_SIZE;
+    if(metadata.numElements == 0 ||
+            metadata.numElements > _FPGA_MAX_LITERAL_ELEMENTS ||
+            metadata.addressStart%4 != 0 || !validClausePageSize(pageSize)){
+        ap_axiu<32,0,0,0> endOfClause;
+        endOfClause.data = 0;
+        clauseStoreOutputStream.write(endOfClause);
+        return;
+    }
     unsigned int address = metadata.addressStart;
     unsigned int subIndex = 0;
 
     SEND_CLAUSE_SEQUENTIAL_MODEL: for(unsigned int processed = 0;
             processed < metadata.numElements; processed++){
+        if(address >= _FPGA_MAX_LITERAL_ELEMENTS){
+            break;
+        }
         const ap_uint<128> line = mClsStore[address/4];
         ap_axiu<32,0,0,0> output;
         output.data = line.range(32*(subIndex%4)+31, 32*(subIndex%4));
+        const lit literal = output.data;
+        if(literal == 0 || literal > _FPGA_MAX_LITERALS ||
+                literal < -_FPGA_MAX_LITERALS){
+            break;
+        }
         clauseStoreOutputStream.write(output);
 
         subIndex++;
@@ -385,22 +471,16 @@ void sendData_dataflow(const ap_uint<128> mClsStore[_FPGA_MAX_LITERAL_ELEMENTS/4
     #if defined(FPGA_HW) || defined(__SYNTHESIS__)
     hls::stream<ap_uint<33>> outputBuffer1;
     hls::stream<ap_uint<33>> outputBuffer2;
-    hls::stream<bool> outputCredit1;
-    hls::stream<bool> outputCredit2;
     #pragma HLS stream variable=outputBuffer1 depth=2
     #pragma HLS stream variable=outputBuffer2 depth=2
-    #pragma HLS stream variable=outputCredit1 depth=2
-    #pragma HLS stream variable=outputCredit2 depth=2
     #pragma HLS dataflow
 
     sendDataScheduler(mClsStore, mCmd, compactClauseLayout, CLAUSE_PAGE_SIZE,
         clauseStoreInputStream1, clauseStoreInputStream2,
-        outputBuffer1, outputBuffer2, outputCredit1, outputCredit2);
-    sendDataOutput(outputBuffer1, outputCredit1, clauseStoreOutputStream1);
-    sendDataOutput(outputBuffer2, outputCredit2, clauseStoreOutputStream2);
+        outputBuffer1, outputBuffer2);
+    sendDataOutput(outputBuffer1, clauseStoreOutputStream1);
+    sendDataOutput(outputBuffer2, clauseStoreOutputStream2);
     #else
-    // Software emulation executes this wrapper sequentially. Write directly to
-    // the external streams so consumers can respond with their EXIT commands.
     sendDataSequentialModel(mClsStore, mCmd, compactClauseLayout,
         CLAUSE_PAGE_SIZE, clauseStoreInputStream1, clauseStoreOutputStream1);
     sendDataSequentialModel(mClsStore, mCmd, compactClauseLayout,
@@ -421,6 +501,7 @@ void saveData(ap_uint<128> mClsStore[_FPGA_MAX_LITERAL_ELEMENTS/4],
     unsigned int nextAddr = 0;
 
     ap_axiu<64,0,0,0> updateLitStorePos;
+    updateLitStorePos.data = 0;
     updateLitStorePos.data.range(31,0) = lh::SAVE;
     locationInputStream.write(updateLitStorePos);
 
@@ -474,81 +555,135 @@ void getDeletedClsID(hls::stream<cls>& removeIDStream,
     #pragma HLS inline off
 
     unsigned int removedCount = 0;
-    unsigned int startBucketIndex = _FPGA_MAX_LBD_BUCKETS-1;
-    bool skipped = false;
-    GET_REMOVE_ID: while(true){
-        #pragma HLS loop_tripcount min=16 max=16
+    GET_REMOVE_ID: for(int bucketIndex = _FPGA_MAX_LBD_BUCKETS-1;
+            bucketIndex >= 0 && removedCount < removeTotal; bucketIndex--){
+        #pragma HLS loop_tripcount min=1 max=10
 
-        if(removedCount == removeTotal){
-            break;
-        }
+        const unsigned int bucket = (unsigned int)bucketIndex;
+        const unsigned int initialUsedCount = tracker[bucket].usedCount;
+        unsigned int accessIdx = tracker[bucket].accessIdx;
+        unsigned int removedFromBucket = 0;
+        bool protectedFound = false;
 
-        if(tracker[startBucketIndex].usedCount == 0 || skipped){
-            skipped = false;
-            startBucketIndex--;
-            continue;
-        }
+        SCAN_REMOVE_BUCKET: for(unsigned int scanned = 0;
+                scanned < initialUsedCount && removedCount < removeTotal;
+                scanned++){
+            #pragma HLS loop_tripcount min=1 max=128
 
-        unsigned int toEndCount = _FPGA_MAX_CLAUSES - tracker[startBucketIndex].accessIdx;
-        if(tracker[startBucketIndex].accessIdx < tracker[startBucketIndex].insertIdx){
-            toEndCount = tracker[startBucketIndex].insertIdx - tracker[startBucketIndex].accessIdx;
-        }
-        unsigned int offset = tracker[startBucketIndex].accessIdx;
+            const cls getClsID =
+                usedClsIDBuckets[_FPGA_MAX_CLAUSES*bucket+accessIdx];
+            accessIdx = (accessIdx+1)%_FPGA_MAX_CLAUSES;
 
-        if(toEndCount >= removeTotal-removedCount){
-            toEndCount = removeTotal-removedCount;
-        }
-
-        bool skip = false;
-        GET_DEL_CLS: for(unsigned int i = 0; i < toEndCount; i++){
-            #pragma HLS pipeline
-            #pragma HLS loop_tripcount min=16 max=16
-
-            cls getClsID = usedClsIDBuckets[_FPGA_MAX_CLAUSES*startBucketIndex+offset+i];
-
-            if(getClsID != lastInsertedID){
-                LBDBucketCount[startBucketIndex]++;
-                removedCount++;
-                removeIDStream.write(getClsID);
-
-            }else{
-                skip = true;
-                skipped = true;
+            if(getClsID == lastInsertedID){
+                protectedFound = true;
+                continue;
             }
+
+            LBDBucketCount[bucket]++;
+            removedCount++;
+            removedFromBucket++;
+            removeIDStream.write(getClsID);
         }
 
-        tracker[startBucketIndex].accessIdx = (tracker[startBucketIndex].accessIdx + (toEndCount-skip))%_FPGA_MAX_CLAUSES;
-        tracker[startBucketIndex].usedCount -= (toEndCount-skip);
+        tracker[bucket].accessIdx = accessIdx;
+        tracker[bucket].usedCount = initialUsedCount-removedFromBucket;
+
+        // Keep the remaining ring contiguous.  This write is deliberately
+        // outside the external-memory scan pipeline: placing it in that loop
+        // expands one AXI write response into a 93-cycle recurrence.
+        if(protectedFound){
+            const unsigned int insertIdx = tracker[bucket].insertIdx;
+            usedClsIDBuckets[_FPGA_MAX_CLAUSES*bucket+insertIdx] =
+                lastInsertedID;
+            tracker[bucket].insertIdx = (insertIdx+1)%_FPGA_MAX_CLAUSES;
+        }
     }
 }
 
 #ifdef FPGA_HW
 void deleteClauses(mmuStream<cls, _FPGA_MAX_CLAUSES>& freeClsID, mmuStream<unsigned int, _MAX_PAGES_CLS_STORE_>& freeClsPageAddresses,
-    hls::stream<cls>& removeIDStream, hls::stream<ap_uint<96>>& intermediateStream,
+    const cls removeID, hls::stream<ap_uint<96>>& intermediateStream,
     hls::stream<ap_axiu<32,0,0,0>>& clauseStoreOutputStream1, hls::stream<ap_axiu<64,0,0,0>>& locationInputStream,
-    const clauseMetaData mCmd[_FPGA_MAX_CLAUSES], ap_uint<128> mClsStore[_FPGA_MAX_LITERAL_ELEMENTS/4],
+    clauseMetaData mCmd[_FPGA_MAX_CLAUSES], ap_uint<128> mClsStore[_FPGA_MAX_LITERAL_ELEMENTS/4],
     const ap_uint<1> compactClauseLayout[_FPGA_MAX_CLAUSES],
     const unsigned int CLAUSE_PAGE_SIZE){
 #else
 void deleteClauses(mmuStream<cls, _FPGA_MAX_CLAUSES>& freeClsID, mmuStream<unsigned int, _MAX_PAGES_CLS_STORE_>& freeClsPageAddresses,
-    hls::stream<cls>& removeIDStream,
+    const cls removeID,
     hls::stream<ap_axiu<96,0,0,0>>& clauseStoreInputStream,
     hls::stream<ap_axiu<32,0,0,0>>& clauseStoreOutputStream1, hls::stream<ap_axiu<64,0,0,0>>& locationInputStream,
-    const clauseMetaData mCmd[_FPGA_MAX_CLAUSES], ap_uint<128> mClsStore[_FPGA_MAX_LITERAL_ELEMENTS/4],
+    clauseMetaData mCmd[_FPGA_MAX_CLAUSES], ap_uint<128> mClsStore[_FPGA_MAX_LITERAL_ELEMENTS/4],
     const ap_uint<1> compactClauseLayout[_FPGA_MAX_CLAUSES],
     const unsigned int CLAUSE_PAGE_SIZE){
 #endif
 
     #pragma HLS inline off
 
-    unsigned int removeID = removeIDStream.read();
-
-    freeClsID.write(removeID);
-    clauseMetaData getCmd = mCmd[removeID];
-
     ap_axiu<32,0,0,0> sendData;
     sendData.data = removeID;
     clauseStoreOutputStream1.write(sendData);
+
+    // Preserve the fixed response framing even if an explicit-delete list is
+    // stale or duplicated.  Returning a zero length lets the solver finish
+    // this deletion record without indexing metadata or waiting for literals.
+    if(removeID < 0 || (unsigned int)removeID >= _FPGA_MAX_CLAUSES ||
+            mCmd[removeID].numElements == 0){
+        sendData.data = 0;
+        clauseStoreOutputStream1.write(sendData);
+        return;
+    }
+
+    const clauseMetaData getCmd = mCmd[removeID];
+    const bool compactLayout = compactClauseLayout[removeID];
+    const unsigned int usePageSize = compactLayout ? 4 : CLAUSE_PAGE_SIZE;
+    bool validClause = getCmd.numElements <= _FPGA_MAX_LEARN_ELE &&
+        usePageSize >= 4 && usePageSize <= _FPGA_MAX_LITERAL_ELEMENTS &&
+        usePageSize%4 == 0 && getCmd.addressStart%4 == 0;
+    unsigned int validateAddress = getCmd.addressStart;
+    unsigned int validateSubIndex = 0;
+
+    VALIDATE_DELETE_CLAUSE: for(unsigned int processed = 0;
+            processed < getCmd.numElements && validClause; processed++){
+        #pragma HLS loop_tripcount min=1 max=1024
+        if(validateAddress >= _FPGA_MAX_LITERAL_ELEMENTS){
+            validClause = false;
+            break;
+        }
+
+        const ap_uint<128> line = mClsStore[validateAddress/4];
+        const lit literal = line.range(
+            32*(validateSubIndex%4)+31, 32*(validateSubIndex%4));
+        if(literal == 0 || literal > _FPGA_MAX_LITERALS ||
+                literal < -_FPGA_MAX_LITERALS){
+            validClause = false;
+            break;
+        }
+
+        validateSubIndex++;
+        validateAddress++;
+        if(processed + 1 < getCmd.numElements &&
+                validateSubIndex == usePageSize-1){
+            validateAddress = line.range(127,96);
+            validateSubIndex = 0;
+            if(validateAddress >= _FPGA_MAX_LITERAL_ELEMENTS ||
+                    validateAddress%4 != 0){
+                validClause = false;
+            }
+        }
+    }
+
+    if(!validClause){
+        sendData.data = 0;
+        clauseStoreOutputStream1.write(sendData);
+        // A zero-length response tells the producer not to emit updates for
+        // this record. Waiting for the stale metadata length here would leave
+        // both kernels permanently blocked on each other.
+        return;
+    }
+
+    freeClsID.write(removeID);
+    mCmd[removeID].numElements = 0;
+
     sendData.data = getCmd.numElements;
     clauseStoreOutputStream1.write(sendData);
 
@@ -558,15 +693,13 @@ void deleteClauses(mmuStream<cls, _FPGA_MAX_CLAUSES>& freeClsID, mmuStream<unsig
     unsigned int processed = 0;
     unsigned int tmpAddr = 0;
     unsigned int numElements = getCmd.numElements;
-    const bool compactLayout = compactClauseLayout[removeID];
-    const unsigned int usePageSize = compactLayout ? 4 : CLAUSE_PAGE_SIZE;
-
     ap_axiu<64,0,0,0> updateLitStorePos;
+    updateLitStorePos.data = 0;
     updateLitStorePos.data.range(31,0) = lh::SEND;
     locationInputStream.write(updateLitStorePos);
 
     ap_uint<128> get = 0;
-    SEND_DATA_DELETE_NO_WRAP: while(true){
+    SEND_DATA_DELETE_NO_WRAP: while(numElements != 0){
         #pragma HLS loop_tripcount min=16 max=16
 
         if(state == 0){
@@ -582,6 +715,7 @@ void deleteClauses(mmuStream<cls, _FPGA_MAX_CLAUSES>& freeClsID, mmuStream<unsig
             clauseStoreOutputStream1.write(sendData);
 
             ap_axiu<64,0,0,0> updateLitStorePos;
+            updateLitStorePos.data = 0;
             updateLitStorePos.data.range(31,0) = (reqAddrLit/4)*4+subIndex%4;
             locationInputStream.write(updateLitStorePos);
                 
@@ -608,6 +742,7 @@ void deleteClauses(mmuStream<cls, _FPGA_MAX_CLAUSES>& freeClsID, mmuStream<unsig
 
     ap_wait();
 
+    updateLitStorePos.data = 0;
     updateLitStorePos.data.range(31,0) = lh::UPDATE;
     locationInputStream.write(updateLitStorePos);
 
@@ -638,27 +773,52 @@ void deleteClauses(mmuStream<cls, _FPGA_MAX_CLAUSES>& freeClsID, mmuStream<unsig
     locationInputStream.write(updateLitStorePos);
 }
 
+#ifdef FPGA_HW
+void deleteClauseTransaction(
+    mmuStream<cls, _FPGA_MAX_CLAUSES>& freeClsID,
+    mmuStream<unsigned int, _MAX_PAGES_CLS_STORE_>& freeClsPageAddresses,
+    const cls removeID,
+    hls::stream<ap_axiu<96,0,0,0>>& clauseStoreInputStream1,
+    hls::stream<ap_axiu<32,0,0,0>>& clauseStoreOutputStream1,
+    hls::stream<ap_axiu<64,0,0,0>>& locationInputStream,
+    clauseMetaData mCmd[_FPGA_MAX_CLAUSES],
+    ap_uint<128> mClsStore[_FPGA_MAX_LITERAL_ELEMENTS/4],
+    const ap_uint<1> compactClauseLayout[_FPGA_MAX_CLAUSES],
+    const unsigned int CLAUSE_PAGE_SIZE){
+    #pragma HLS inline off
+
+    hls::stream<ap_uint<96>> intermediateStream;
+    #pragma HLS stream variable=intermediateStream depth=1024
+    #pragma HLS dataflow
+
+    axiStreamBuffer_sendDelete(clauseStoreInputStream1, intermediateStream);
+    deleteClauses(freeClsID, freeClsPageAddresses, removeID,
+        intermediateStream, clauseStoreOutputStream1, locationInputStream,
+        mCmd, mClsStore, compactClauseLayout, CLAUSE_PAGE_SIZE);
+}
+#endif
+
 void delete_wrapper(mmuStream<cls, _FPGA_MAX_CLAUSES>& freeClsID, 
     hls::stream<cls>& removeIDStream,
     mmuStream<unsigned int, _MAX_PAGES_CLS_STORE_>& freeClsPageAddresses,
     hls::stream<ap_axiu<96,0,0,0>>& clauseStoreInputStream1,
     hls::stream<ap_axiu<32,0,0,0>>& clauseStoreOutputStream1, hls::stream<ap_axiu<64,0,0,0>>& locationInputStream,
-    const clauseMetaData mCmd[_FPGA_MAX_CLAUSES], ap_uint<128> mClsStore[_FPGA_MAX_LITERAL_ELEMENTS/4],
+    clauseMetaData mCmd[_FPGA_MAX_CLAUSES], ap_uint<128> mClsStore[_FPGA_MAX_LITERAL_ELEMENTS/4],
     const ap_uint<1> compactClauseLayout[_FPGA_MAX_CLAUSES],
     const unsigned int removeTotal, const unsigned int CLAUSE_PAGE_SIZE){
     #pragma HLS inline off
 
-    hls::stream<ap_uint<96>> intermediateStream;
-    #pragma HLS stream variable=intermediateStream depth=1024
-
     DELETE_LOOP: for(unsigned int i = 0; i < removeTotal; i++){
         #pragma HLS loop_tripcount min=16 max=16
-        #pragma HLS dataflow
-
-        axiStreamBuffer_sendDelete(clauseStoreInputStream1, intermediateStream);
+        const cls removeID = removeIDStream.read();
         #ifdef FPGA_HW
-        deleteClauses(freeClsID, freeClsPageAddresses, removeIDStream,
-            intermediateStream, clauseStoreOutputStream1, locationInputStream,
+        deleteClauseTransaction(freeClsID, freeClsPageAddresses,
+            removeID, clauseStoreInputStream1, clauseStoreOutputStream1,
+            locationInputStream, mCmd, mClsStore, compactClauseLayout,
+            CLAUSE_PAGE_SIZE);
+        #else
+        deleteClauses(freeClsID, freeClsPageAddresses, removeID,
+            clauseStoreInputStream1, clauseStoreOutputStream1, locationInputStream,
             mCmd, mClsStore, compactClauseLayout, CLAUSE_PAGE_SIZE);
         #endif
     }
@@ -670,7 +830,7 @@ void deleteClauses_wrapper(mmuStream<cls, _FPGA_MAX_CLAUSES>& freeClsID,
     hls::stream<ap_axiu<96,0,0,0>>& clauseStoreInputStream1,
     hls::stream<ap_axiu<32,0,0,0>>& clauseStoreOutputStream1, hls::stream<ap_axiu<64,0,0,0>>& locationInputStream,
     cls* usedClsIDBuckets, minimumStreamTracker tracker[_FPGA_MAX_LBD_BUCKETS], cls lastInsertedID,
-    const clauseMetaData mCmd[_FPGA_MAX_CLAUSES], ap_uint<128> mClsStore[_FPGA_MAX_LITERAL_ELEMENTS/4],
+    clauseMetaData mCmd[_FPGA_MAX_CLAUSES], ap_uint<128> mClsStore[_FPGA_MAX_LITERAL_ELEMENTS/4],
     const ap_uint<1> compactClauseLayout[_FPGA_MAX_CLAUSES],
     const unsigned int removeTotal, const unsigned int CLAUSE_PAGE_SIZE, unsigned int LBDBucketCount[_FPGA_MAX_LBD_BUCKETS]){
     #pragma HLS inline off
@@ -691,65 +851,14 @@ void deleteClauses_wrapper(mmuStream<cls, _FPGA_MAX_CLAUSES>& freeClsID,
     #else
     getDeletedClsID(removeIDStream, usedClsIDBuckets, tracker, lastInsertedID, removeTotal, LBDBucketCount);
     for(unsigned int i = 0; i < removeTotal; i++){
-        deleteClauses(freeClsID, freeClsPageAddresses, removeIDStream,
+        const cls removeID = removeIDStream.read();
+        deleteClauses(freeClsID, freeClsPageAddresses, removeID,
             clauseStoreInputStream1, clauseStoreOutputStream1, locationInputStream,
             mCmd, mClsStore, compactClauseLayout, CLAUSE_PAGE_SIZE);
     }
     #endif
 
 }
-
-void readExplicitDeleteIDs(hls::stream<cls>& removeIDStream,
-    hls::stream<ap_axiu<96,0,0,0>>& clauseStoreInputStream2,
-    const unsigned int removeTotal){
-    #pragma HLS inline off
-    READ_EXPLICIT_DELETE_IDS: for(unsigned int i = 0; i < removeTotal; i++){
-        #pragma HLS loop_tripcount min=0 max=1024
-        removeIDStream.write(clauseStoreInputStream2.read().data.range(31,0));
-    }
-}
-
-void bufferExplicitDeleteUpdates(
-    hls::stream<ap_axiu<96,0,0,0>>& clauseStoreInputStream1,
-    hls::stream<ap_uint<96>>& intermediateStream,
-    const unsigned int removeTotal){
-    #pragma HLS inline off
-
-    BUFFER_EXPLICIT_DELETE_UPDATES: for(unsigned int i = 0; i < removeTotal; i++){
-        #pragma HLS loop_tripcount min=0 max=1024
-        while(true){
-            #pragma HLS loop_tripcount min=1 max=1025
-            const ap_axiu<96,0,0,0> update = clauseStoreInputStream1.read();
-            if((int)update.data.range(95,64) == csh::EXIT){
-                break;
-            }
-            intermediateStream.write(update.data);
-        }
-    }
-}
-
-#ifdef FPGA_HW
-void deleteExplicitClauses(
-    mmuStream<cls, _FPGA_MAX_CLAUSES>& freeClsID,
-    mmuStream<unsigned int, _MAX_PAGES_CLS_STORE_>& freeClsPageAddresses,
-    hls::stream<cls>& removeIDStream,
-    hls::stream<ap_uint<96>>& intermediateStream,
-    hls::stream<ap_axiu<32,0,0,0>>& clauseStoreOutputStream1,
-    hls::stream<ap_axiu<64,0,0,0>>& locationInputStream,
-    const clauseMetaData mCmd[_FPGA_MAX_CLAUSES],
-    ap_uint<128> mClsStore[_FPGA_MAX_LITERAL_ELEMENTS/4],
-    const ap_uint<1> compactClauseLayout[_FPGA_MAX_CLAUSES],
-    const unsigned int removeTotal, const unsigned int CLAUSE_PAGE_SIZE){
-    #pragma HLS inline off
-
-    DELETE_EXPLICIT_CLAUSES: for(unsigned int i = 0; i < removeTotal; i++){
-        #pragma HLS loop_tripcount min=0 max=1024
-        deleteClauses(freeClsID, freeClsPageAddresses, removeIDStream,
-            intermediateStream, clauseStoreOutputStream1, locationInputStream,
-            mCmd, mClsStore, compactClauseLayout, CLAUSE_PAGE_SIZE);
-    }
-}
-#endif
 
 void deleteExplicitClauses_wrapper(mmuStream<cls, _FPGA_MAX_CLAUSES>& freeClsID,
     mmuStream<unsigned int, _MAX_PAGES_CLS_STORE_>& freeClsPageAddresses,
@@ -757,33 +866,32 @@ void deleteExplicitClauses_wrapper(mmuStream<cls, _FPGA_MAX_CLAUSES>& freeClsID,
     hls::stream<ap_axiu<96,0,0,0>>& clauseStoreInputStream2,
     hls::stream<ap_axiu<32,0,0,0>>& clauseStoreOutputStream1,
     hls::stream<ap_axiu<64,0,0,0>>& locationInputStream,
-    const clauseMetaData mCmd[_FPGA_MAX_CLAUSES],
+    clauseMetaData mCmd[_FPGA_MAX_CLAUSES],
     ap_uint<128> mClsStore[_FPGA_MAX_LITERAL_ELEMENTS/4],
     const ap_uint<1> compactClauseLayout[_FPGA_MAX_CLAUSES],
     const unsigned int removeTotal, const unsigned int CLAUSE_PAGE_SIZE){
     #pragma HLS inline off
 
-    hls::stream<cls> removeIDStream;
-    #pragma HLS stream variable=removeIDStream depth=64
+    // Explicit deletion is a per-clause transaction.  The solver sends the
+    // next ID only after both clause views and the location map for the
+    // current ID have been updated.
+    DELETE_EXPLICIT_CLAUSES_TRANSACTIONAL: for(unsigned int i = 0;
+            i < removeTotal; i++){
+        #pragma HLS loop_tripcount min=0 max=1024
+        const ap_axiu<96,0,0,0> idPacket = clauseStoreInputStream2.read();
+        const cls removeID = idPacket.data.range(31,0);
 
-    #ifdef FPGA_HW
-    hls::stream<ap_uint<96>> intermediateStream;
-    #pragma HLS stream variable=intermediateStream depth=1024
-    #pragma HLS dataflow
-
-    readExplicitDeleteIDs(removeIDStream, clauseStoreInputStream2, removeTotal);
-    bufferExplicitDeleteUpdates(clauseStoreInputStream1, intermediateStream, removeTotal);
-    deleteExplicitClauses(freeClsID, freeClsPageAddresses, removeIDStream,
-        intermediateStream, clauseStoreOutputStream1, locationInputStream,
-        mCmd, mClsStore, compactClauseLayout, removeTotal, CLAUSE_PAGE_SIZE);
-    #else
-    readExplicitDeleteIDs(removeIDStream, clauseStoreInputStream2, removeTotal);
-    for(unsigned int i = 0; i < removeTotal; i++){
-        deleteClauses(freeClsID, freeClsPageAddresses, removeIDStream,
+        #ifdef FPGA_HW
+        deleteClauseTransaction(freeClsID, freeClsPageAddresses,
+            removeID, clauseStoreInputStream1, clauseStoreOutputStream1,
+            locationInputStream, mCmd, mClsStore, compactClauseLayout,
+            CLAUSE_PAGE_SIZE);
+        #else
+        deleteClauses(freeClsID, freeClsPageAddresses, removeID,
             clauseStoreInputStream1, clauseStoreOutputStream1, locationInputStream,
             mCmd, mClsStore, compactClauseLayout, CLAUSE_PAGE_SIZE);
+        #endif
     }
-    #endif
 }
 
 
@@ -817,6 +925,10 @@ void clause_store_handler(ap_uint<128>* clauseStore, clauseMetaData* cmd,
     const unsigned int CLAUSE_PAGE_SIZE = clausePageSize;
     unsigned int clauseElements = initialClauseElements;
     const double PRUNE_PERCENTAGE = prunePctage;
+    const bool validConfiguration = validClausePageSize(CLAUSE_PAGE_SIZE) &&
+        MAX_CLAUSE_ELEMENTS <= _FPGA_MAX_LITERAL_ELEMENTS &&
+        clauseElements <= MAX_CLAUSE_ELEMENTS &&
+        initialClauseCount <= _FPGA_MAX_CLAUSES;
 
     static unsigned int originalClauseCount = 0;
     static unsigned int usedTotalIDCount = 0;
@@ -841,11 +953,13 @@ void clause_store_handler(ap_uint<128>* clauseStore, clauseMetaData* cmd,
     static minimumStreamTracker tracker[_FPGA_MAX_LBD_BUCKETS];
     static cls freeID = 0;
     static cls lastInsertedID = 0;
-    if(sessionReset){
+    static bool lastInsertedIsBucketed = false;
+    if(sessionReset && validConfiguration){
         originalClauseCount = initialClauseCount;
         usedTotalIDCount = 0;
         freeID = 0;
         lastInsertedID = 0;
+        lastInsertedIsBucketed = false;
         freeClsPageAddresses.reset(clauseElements,_FPGA_MAX_LITERAL_ELEMENTS,CLAUSE_PAGE_SIZE);
         freeClsID.reset(originalClauseCount,_FPGA_MAX_CLAUSES,1);
         INITIALIZE_LBD_META: for(unsigned int i = 0; i < _FPGA_MAX_LBD_BUCKETS; i++){
@@ -871,6 +985,28 @@ void clause_store_handler(ap_uint<128>* clauseStore, clauseMetaData* cmd,
 
         if(code == csh::EXIT){
             break;
+        }else if(!validConfiguration){
+            if(code == csh::SEND_LEN || code == csh::SEND_LEN_BCP){
+                rejectLengthRequests(clauseStoreInputStream1,
+                    clauseStoreOutputStream1);
+            }else if(code == csh::SEND_CLS){
+                rejectClauseRequests(clauseStoreInputStream1,
+                    clauseStoreInputStream2, clauseStoreOutputStream1,
+                    clauseStoreOutputStream2);
+            }else if(code == csh::SAVE){
+                ap_axiu<32,0,0,0> response;
+                response.data = -4;
+                clauseStoreOutputStream1.write(response);
+            }else if(code == csh::DELETE || code == csh::DELETE_IDS){
+                // DELETE_IDS is negotiated before any IDs are sent.  A zero
+                // response must therefore be produced immediately; waiting
+                // for IDs here would deadlock with the solver waiting for the
+                // accepted count.
+                ap_axiu<32,0,0,0> response;
+                response.data = 0;
+                clauseStoreOutputStream1.write(response);
+            }
+            continue;
         }else if(code == csh::SEND_LEN || code == csh::SEND_LEN_BCP){
             sendLength_wrapper(clauseStoreOutputStream1, clauseStoreInputStream1, mCmd);
         }else if(code == csh::SEND_CLS){
@@ -885,7 +1021,14 @@ void clause_store_handler(ap_uint<128>* clauseStore, clauseMetaData* cmd,
             cmd.numElements = getCommand.data.range(31,0);
 
             ap_axiu<32,0,0,0> sendData;
-            if((freeClsPageAddresses.size()*(CLAUSE_PAGE_SIZE-1) < cmd.numElements) || freeClsID.empty()){
+            const bool validSave = cmd.numElements > 0 &&
+                cmd.numElements <= _FPGA_MAX_LEARN_ELE &&
+                validClausePageSize(CLAUSE_PAGE_SIZE);
+            const unsigned int requiredPages = validSave
+                ? (cmd.numElements + CLAUSE_PAGE_SIZE-2)/(CLAUSE_PAGE_SIZE-1)
+                : UINT_MAX;
+            if(!validSave || freeClsPageAddresses.size() < requiredPages ||
+                    freeClsID.empty()){
                 sendData.data = -4;
                 clauseStoreOutputStream1.write(sendData);
             }else{
@@ -893,6 +1036,7 @@ void clause_store_handler(ap_uint<128>* clauseStore, clauseMetaData* cmd,
                 
                 freeID = freeClsID.read();
                 lastInsertedID = freeID;
+                lastInsertedIsBucketed = false;
                 mCmd[freeID] = cmd;
                 compactClauseLayout[freeID] = 0;
 
@@ -912,8 +1056,26 @@ void clause_store_handler(ap_uint<128>* clauseStore, clauseMetaData* cmd,
             tracker[lbdLevelIndex].usedCount++;
             LBDBucketCount[0][lbdLevelIndex]++;
             usedTotalIDCount++;
+            lastInsertedIsBucketed = true;
         }else if(code == csh::DELETE){
-            unsigned int removeTotal = usedTotalIDCount * PRUNE_PERCENTAGE;
+            unsigned int trackedTotal = 0;
+            COUNT_BUCKETED_CLAUSES: for(unsigned int i = 0; i < _FPGA_MAX_LBD_BUCKETS; i++){
+                #pragma HLS unroll
+                trackedTotal += tracker[i].usedCount;
+            }
+            usedTotalIDCount = trackedTotal;
+
+            const unsigned int protectedCount =
+                lastInsertedIsBucketed && trackedTotal != 0 ? 1 : 0;
+            const unsigned int deletableTotal = trackedTotal-protectedCount;
+            unsigned int removeTotal = 0;
+            if(PRUNE_PERCENTAGE > 0.0){
+                removeTotal = PRUNE_PERCENTAGE >= 1.0 ? trackedTotal :
+                    (unsigned int)(trackedTotal*PRUNE_PERCENTAGE);
+                if(removeTotal > deletableTotal){
+                    removeTotal = deletableTotal;
+                }
+            }
             usedTotalIDCount -= removeTotal;
             ap_axiu<32,0,0,0> sendData;
             sendData.data = removeTotal;
@@ -927,7 +1089,10 @@ void clause_store_handler(ap_uint<128>* clauseStore, clauseMetaData* cmd,
                     removeTotal, CLAUSE_PAGE_SIZE, LBDBucketCount[1]);
             }
         }else if(code == csh::DELETE_IDS){
-            const unsigned int removeTotal = getCommand.data.range(31,0);
+            const unsigned int declaredRemoveTotal = getCommand.data.range(31,0);
+            const unsigned int removeTotal =
+                declaredRemoveTotal <= _FPGA_MAX_CLAUSES
+                    ? declaredRemoveTotal : 0;
             ap_axiu<32,0,0,0> sendData;
             sendData.data = removeTotal;
             clauseStoreOutputStream1.write(sendData);

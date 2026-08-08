@@ -1,0 +1,9 @@
+0	../hardware_learning_probe.cnf
+0	../hardware_permanent_activation_equivalent.cnf
+1	../../SAT_test_cases/satlib/uf100-010_sat.cnf
+0	../../SAT_test_cases/satlib/uuf100-02_unsat.cnf
+1	../../SAT_test_cases/satlib/aim-200-3_4-yes1-1.cnf
+0	../../SAT_test_cases/satlib/aim-200-1_6-no-1.cnf
+1	../../benchmark/unif-r3-v500-c1500-01.cnf
+0	../../SAT_test_cases/satlib/hole8_unsat.cnf
+1	../../SAT_test_cases/sat/289-sat-6x30.cnf

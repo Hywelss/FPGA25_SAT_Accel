@@ -2,3 +2,34 @@
 /.Xil/
 /timing-analysis/
 /timing-experiments/
+
+# Vitis/Vivado generated work products
+.ipcache/
+_x*/
+FPGArpt/
+hd_visual/
+src/emconfig_out/
+src/obj/
+src/bin/.run/
+*.xo
+*.xo.compile_summary
+*.xsa
+*.xsa.link_summary
+*.ltx
+*.link_summary
+*.package_summary
+*.backup.log
+*.log
+
+# Generated emulation and implementation outputs. The checked-in real-hardware
+# executable and xclbin remain tracked even though they match these patterns.
+src/bin/emconfig.json
+src/bin/result_sw_emu.txt
+src/bin/test.*.out
+src/bin/workload-*.xclbin
+src/bin/workload-*.xclbin.*
+
+# One-off implementation reports emitted at the repository root
+/cascaded_blocks.txt
+/tight_setup_hold_pins.txt
+/unified-*.txt

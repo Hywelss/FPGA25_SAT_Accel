@@ -6,12 +6,83 @@
 #include "ap_utils.h"
 #include "manage.h"
 #include "data_structures.h"
+
+inline bool computeBacktrackHeight(const int backtrackLevel,
+    const unsigned int answerStackHeight,
+    const literalMetaData lmd[_FPGA_MAX_LITERALS],
+    unsigned int& backtrackHeight){
+    if(backtrackLevel < 0 ||
+            (unsigned int)backtrackLevel >= _FPGA_MAX_LITERALS){
+        return false;
+    }
+    const unsigned int targetHeight = lmd[backtrackLevel].decisionLevelStackEnd;
+    if(targetHeight > answerStackHeight){
+        return false;
+    }
+    backtrackHeight = answerStackHeight-targetHeight;
+    return true;
+}
 #include "backtrack.h"
 #include "minimize.h"
 
 inline bool isConstraintActivationLiteral(lit literal,
     unsigned int constraintActivation) {
     return (unsigned int)abs(literal) == constraintActivation;
+}
+
+inline bool shouldSaveClauseLiteral(
+    const lit literal,
+    const literalMinimizeMetaData
+        lmmd[_FPGA_PARALLEL_MINIMIZE][_FPGA_MAX_LITERALS],
+    bool& keep){
+    if(!isValidLiteral(literal)){
+        keep = false;
+        return false;
+    }
+
+    const unsigned int variable = abs(literal)-1;
+    keep = LMMD_IS_IN_FIX_STACK(lmmd[0][variable].compactlmmd) == 0;
+    for(unsigned int lane = 0; lane < _FPGA_PARALLEL_MINIMIZE; lane++){
+        #pragma HLS unroll
+        if(LMMD_MIN_KEEP(lmmd[lane][variable].compactlmmd) != 1){
+            keep = false;
+        }
+    }
+    return true;
+}
+
+inline bool countSavedClauseLiterals(
+    const lit resolutionClause[_FPGA_MAX_LEARN_ELE],
+    const unsigned int numElements, const unsigned int numLiterals,
+    const literalMinimizeMetaData
+        lmmd[_FPGA_PARALLEL_MINIMIZE][_FPGA_MAX_LITERALS],
+    unsigned int& savedCount){
+    savedCount = 0;
+    if(numElements > _FPGA_MAX_LEARN_ELE ||
+            numLiterals > _FPGA_MAX_LITERALS){
+        return false;
+    }
+    bool valid = true;
+
+    COUNT_SAVED_CLAUSE_LITERALS: for(unsigned int i = 0;
+            i < numElements; i++){
+        #pragma HLS loop_tripcount min=1 max=1024
+        #pragma HLS pipeline II=1
+        const lit literal = resolutionClause[i];
+        bool keep = false;
+        if(!shouldSaveClauseLiteral(literal, lmmd, keep)){
+            valid = false;
+            continue;
+        }
+        if((unsigned int)abs(literal) > numLiterals){
+            valid = false;
+            continue;
+        }
+        if(keep){
+            savedCount++;
+        }
+    }
+    return valid;
 }
 
 void clause_store_prefetch(hls::stream<cls>& prefetchClsStore, hls::stream<ap_axiu<32,0,0,0>>& clauseStoreOutputStream);
@@ -46,11 +117,12 @@ void undo_states_and_minimize_task_parallel_wrapper(hls::stream<ap_axiu<32,0,0,0
     hls::stream<ap_axiu<32,0,0,0>>& clauseStoreOutputStream1, hls::stream<ap_axiu<32,0,0,0>>& clauseStoreOutputStream2, volatile uint64_t store[2]);
 
 void findNextCls(hls::stream<cls>& nextClauseReg, hls::stream<bool>& stopSignal, 
-    unsigned int& trailEndIndex, const ap_uint<12> mergeScratchPad[_FPGA_MAX_LITERALS], const ap_uint<512> validBit[_FPGA_MAX_LITERALS/512],
+    int& trailEndIndex, const ap_uint<12> mergeScratchPad[_FPGA_MAX_LITERALS], const ap_uint<512> validBit[_FPGA_MAX_LITERALS/512],
     const lit answerStack[_FPGA_MAX_LITERALS], const cls unitByCls[_FPGA_MAX_LITERALS],
     const literalMinimizeMetaData lmmd[_FPGA_PARALLEL_MINIMIZE][_FPGA_MAX_LITERALS], ap_uint<64>& learnedStats);
-void findNextClsCompare(hls::stream<cls>& nextClauseReg, hls::stream<bool>& stopSignal, cls& nextClauseMerge);
-void findNextClsDataflow(unsigned int& trailEndIndex, cls& nextClauseMerge,
+void findNextClsCompare(hls::stream<cls>& nextClauseReg, hls::stream<bool>& stopSignal,
+    cls& nextClauseMerge, bool& foundNextClause);
+void findNextClsDataflow(int& trailEndIndex, cls& nextClauseMerge, bool& foundNextClause,
     const ap_uint<_FPGA_MAX_LEARN_ELE_BITS+2> mergeScratchPad[_FPGA_MAX_LITERALS], const ap_uint<512> validBit[_FPGA_MAX_LITERALS/512],
     const lit answerStack[_FPGA_MAX_LITERALS], const cls unitByCls[_FPGA_MAX_LITERALS],
     const literalMinimizeMetaData lmmd[_FPGA_PARALLEL_MINIMIZE][_FPGA_MAX_LITERALS], ap_uint<64>& learnedStats);

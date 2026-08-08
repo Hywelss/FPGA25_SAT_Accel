@@ -1,6 +1,9 @@
 #!/bin/bash
 
-rm -rf v++*.log xcd.log xrc.log src/bin/.run
+if [[ -z "${PRESERVE_BUILD_LOGS:-}" ]]
+then
+	rm -rf v++*.log xcd.log xrc.log src/bin/.run
+fi
 
 RD='\033[0;31m'
 GN='\033[0;32m'

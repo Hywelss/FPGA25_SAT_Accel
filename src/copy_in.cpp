@@ -1,5 +1,11 @@
 #include "copy_in.h"
 
+void touchCopyInDataflowStore(volatile uint64_t store[2]){
+    #pragma HLS inline off
+    store[0]++;
+    store[1]++;
+}
+
 void copy_clsStates(clsState mClsStates[_FPGA_CLS_STATES_PARTITION][_FPGA_MAX_CLAUSES/_FPGA_CLS_STATES_PARTITION], clsStatePCIE* clsStates, const unsigned int numClauses){
     #pragma HLS inline off
     COPY_CLS_STATES: for(unsigned int i = 0; i < numClauses; i++){
@@ -62,7 +68,10 @@ void copy_domain(bool mInDomain[_FPGA_MAX_LITERALS], const unsigned int* decisio
     }
     LOAD_DOMAIN: for(unsigned int i = 0; i < NUM_DOMAIN_LITERALS; i++){
         #pragma HLS loop_tripcount min=1 max=1024
-        mInDomain[decisionDomain[i]-1] = true;
+        const unsigned int variable = decisionDomain[i];
+        if(variable != 0 && variable <= NUM_LITERALS){
+            mInDomain[variable-1] = true;
+        }
     }
 }
 
@@ -77,8 +86,7 @@ void copy_in_dataflow_wrapper(clsState mClsStates[_FPGA_CLS_STATES_PARTITION][_F
     #pragma HLS inline off
     #pragma HLS dataflow
 
-    store[0]++;
-    store[1]++;
+    touchCopyInDataflowStore(store);
 
     copy_clsStates(mClsStates, clsStates, numClauses);
     copy_litStore(mLitStore, litStore1, literalElements);

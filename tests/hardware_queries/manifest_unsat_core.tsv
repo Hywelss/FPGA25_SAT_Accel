@@ -1,0 +1,4 @@
+0	../unsat_core_queries/01_irrelevant_assumption.cnf
+0	../unsat_core_queries/02_direct_assumption_conflict.cnf
+0	../unsat_core_queries/03_root_conflict.cnf
+0	../unsat_core_queries/04_opposite_assumptions.cnf

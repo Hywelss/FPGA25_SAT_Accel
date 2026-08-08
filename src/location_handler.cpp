@@ -28,7 +28,10 @@ void location_handler(
     static ap_uint<128> mLitToClsStorePos[_FPGA_MAX_LITERAL_ELEMENTS/4];
     #pragma HLS bind_storage variable=mLitToClsStorePos type=RAM_S2P impl=URAM latency=2
 
-    if(sessionReset){
+    const bool validConfiguration =
+        clauseElements <= _FPGA_MAX_LITERAL_ELEMENTS &&
+        literalElements <= _FPGA_MAX_LITERAL_ELEMENTS;
+    if(sessionReset && validConfiguration){
         COPY_CLS_TO_LIT_POS: for(unsigned int i = 0; i < clauseElements; i++){
             #pragma HLS loop_tripcount min=1024 max=1024
             ap_uint<128> line = mClsToLitStorePos[i/4];
@@ -59,9 +62,13 @@ void location_handler(
                     break;
                 }
                 unsigned int addr = value.data.range(31,0);
-                ap_uint<128> getAddr = mClsToLitStorePos[addr/4];    
                 ap_axiu<32,0,0,0> send;
-                send.data = getAddr.range(32*(addr%4)+31,32*(addr%4));
+                if(addr >= _FPGA_MAX_LITERAL_ELEMENTS){
+                    send.data = UINT_MAX;
+                }else{
+                    const ap_uint<128> getAddr = mClsToLitStorePos[addr/4];
+                    send.data = getAddr.range(32*(addr%4)+31,32*(addr%4));
+                }
                 locationOutputStream.write(send);
             }
         }else if(code == lh::SAVE){
@@ -76,17 +83,19 @@ void location_handler(
                 }
 
                 unsigned int clsToLitAddr = value.data.range(31,0);    
-                if(clsToLitAddr%4 == 0){
-                    getAddr = 0;
-                }
-                getAddr.range(32*(clsToLitAddr%4)+31,32*(clsToLitAddr%4)) = value.data.range(63,32);
-                mClsToLitStorePos[clsToLitAddr/4] = getAddr;
-
                 unsigned int litToClsAddr = value.data.range(63,32);
-                ap_uint<128> getAddr2 = mLitToClsStorePos[litToClsAddr/4];    
-                getAddr2.range(32*(litToClsAddr%4)+31,32*(litToClsAddr%4)) = value.data.range(31,0);
+                if(clsToLitAddr < _FPGA_MAX_LITERAL_ELEMENTS &&
+                        litToClsAddr < _FPGA_MAX_LITERAL_ELEMENTS){
+                    if(clsToLitAddr%4 == 0){
+                        getAddr = 0;
+                    }
+                    getAddr.range(32*(clsToLitAddr%4)+31,32*(clsToLitAddr%4)) = litToClsAddr;
+                    mClsToLitStorePos[clsToLitAddr/4] = getAddr;
 
-                mLitToClsStorePos[litToClsAddr/4] = getAddr2;
+                    ap_uint<128> getAddr2 = mLitToClsStorePos[litToClsAddr/4];
+                    getAddr2.range(32*(litToClsAddr%4)+31,32*(litToClsAddr%4)) = clsToLitAddr;
+                    mLitToClsStorePos[litToClsAddr/4] = getAddr2;
+                }
             }
         }else if(code == lh::UPDATE){
             UPDATE_LIT_AND_CLS_STORE_LOCATION: while(true){
@@ -102,10 +111,18 @@ void location_handler(
                 unsigned int swapAddr = value.data.range(31,0);
                 unsigned int replaceAddr = value.data.range(63,32);
 
+                if(swapAddr >= _FPGA_MAX_LITERAL_ELEMENTS ||
+                        replaceAddr >= _FPGA_MAX_LITERAL_ELEMENTS){
+                    continue;
+                }
+
                 ap_uint<128> getSwap = mLitToClsStorePos[swapAddr/4];
                 ap_uint<128> getReplace = mLitToClsStorePos[replaceAddr/4];
 
                 unsigned int litToClsAddr = getSwap.range(32*(swapAddr%4)+31,32*(swapAddr%4));
+                if(litToClsAddr >= _FPGA_MAX_LITERAL_ELEMENTS){
+                    continue;
+                }
                 getReplace.range(32*(replaceAddr%4)+31,32*(replaceAddr%4)) = litToClsAddr;
                 mLitToClsStorePos[replaceAddr/4] = getReplace;
 
